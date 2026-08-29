@@ -1,21 +1,31 @@
 # MOTM AI Sales Director — Auth Service
 
 This is the auth/roles slice of the MOTM AI Sales Director internal tool.
-It handles Google-OAuth sign-in (via Supabase Auth) and role management only —
+It handles sign-in (via Supabase Auth) and role management only —
 no frontend, no sales-reasoning logic. That comes later.
 
 ## How it works
 
-- Employees sign in with Google through **Supabase Auth**. There is no
-  separate signup flow — the first successful Google sign-in creates an
-  `auth.users` row, and a Postgres trigger auto-creates a matching
-  `public.profiles` row with **no roles assigned**.
+- Employees sign in through **Supabase Auth**, either via Google OAuth (the
+  intended production path) or email/password via `POST /auth/login` (a
+  thin proxy to Supabase, mainly for easy curl-based testing without a
+  browser redirect — see section 6). There is no separate signup flow either
+  way — the first successful sign-in creates an `auth.users` row, and a
+  Postgres trigger auto-creates a matching `public.profiles` row with **no
+  roles assigned**. Email/password test users are created directly in the
+  Supabase dashboard (no `POST /auth/signup` exists — see section 6).
 - Roles (`admin`, `sales_manager`, `motm_bd`, `motm_sales_engineer`,
   `knowledge_manager`) are never self-assigned. Only an existing admin can
   grant/revoke them via the API. A user can hold multiple roles.
 - The FastAPI backend verifies the Supabase-issued JWT on every request and
   looks up roles itself — it does **not** rely on Postgres Row Level Security
   for API authorization (see "Why RLS isn't the enforcement layer" below).
+- Database access is **SQLAlchemy (async ORM)**, schema changes are
+  **Alembic** migrations (`migrations/versions/`). `supabase/migrations/0001_auth_and_roles.sql`
+  is kept only as a historical record of how the live schema was originally
+  created (via a hand-rolled script, before this project used Alembic) — it
+  is not re-run and should not be edited; all *new* schema changes go
+  through Alembic from here on (see section 2).
 
 ## 1. Prerequisites
 
@@ -29,14 +39,47 @@ pip install -r requirements.txt
 cp .env.example .env          # then fill in the values (see section 3)
 ```
 
-## 2. Run the database migration
+## 2. Database migrations (Alembic)
 
-Open the Supabase dashboard → SQL Editor, paste the contents of
-`supabase/migrations/0001_auth_and_roles.sql`, and run it. (Or, if you use the
-Supabase CLI: `supabase db push`.)
+Schema changes are managed with Alembic, wired to this app's own SQLAlchemy
+engine (`migrations/env.py` imports `app.db.session.engine` — there's no
+`sqlalchemy.url` in `alembic.ini`, so the DB URL only ever lives in `.env`).
 
-This creates the `app_role` enum, `profiles` and `user_roles` tables, RLS
-policies, and the `on_auth_user_created` trigger.
+**On a fresh database:**
+```bash
+alembic upgrade head
+```
+This creates the `app_role` enum, `profiles`/`user_roles` tables, RLS
+policies, and the `on_auth_user_created` trigger — the same schema that was
+originally created by hand (see `supabase/migrations/0001_auth_and_roles.sql`,
+kept only as a historical record) — now expressed as a proper Alembic
+baseline revision (`migrations/versions/15264e15fc09_baseline_auth_schema.py`).
+
+**On the existing project database**, that schema already exists — the
+baseline revision has already been recorded as applied via
+`alembic stamp head`, so don't run `alembic upgrade head` against it (it
+would try to `CREATE TABLE` things that already exist and fail). Just confirm
+you're in sync:
+```bash
+alembic current   # should show 15264e15fc09 (head)
+alembic check     # should print "No new upgrade operations detected."
+```
+
+**Making future schema changes:** edit `app/db/models.py`, then:
+```bash
+alembic revision --autogenerate -m "describe the change"
+alembic upgrade head
+```
+Autogenerate handles plain tables/columns/indexes well. RLS policies,
+`is_admin()`, and `handle_new_user()` aren't expressible via the ORM and need
+hand-written `op.execute(...)` SQL in the migration, same as the baseline
+does — autogenerate won't touch those on its own.
+
+Note: `migrations/env.py` scopes comparison to the `public` schema only
+(`include_object` in that file) — Supabase's project database also has
+`auth`, `storage`, `realtime`, `vault`, etc. schemas full of tables this app
+doesn't own; without that filter, autogenerate would try to diff against all
+of them.
 
 ## 3. Supabase dashboard configuration
 
@@ -59,14 +102,19 @@ frontend callback URLs you'll use once the frontend exists, under
 **Redirect URLs**.
 
 **Find your env var values** (all under Project Settings):
-- `SUPABASE_URL` — API → Project URL
-- `SUPABASE_JWT_SECRET` — API → JWT Settings → JWT Secret (labeled "legacy
-  JWT secret" on newer projects that also offer asymmetric signing keys —
-  this backend verifies the shared-secret HS256 tokens Supabase issues by
-  default)
+- `SUPABASE_URL` — API → Project URL. No separate JWT secret is needed —
+  this backend verifies tokens against Supabase's public JWKS endpoint
+  (`SUPABASE_URL/auth/v1/.well-known/jwks.json`), which works for projects
+  using the newer asymmetric signing keys (ES256/RS256 — this project uses
+  ES256). If your Supabase project is still on the legacy HS256 shared
+  secret instead, JWKS verification won't work for it, since a shared
+  secret is never published via JWKS — that setup would need the old
+  shared-secret verification path added back.
 - `SUPABASE_SERVICE_ROLE_KEY` — API → Project API keys → `service_role`.
-  Not used by any endpoint yet; loaded for future Supabase Admin API use.
-  **Never** expose this key to a client.
+  Used server-side by `POST /auth/login` to call Supabase's auth API, and
+  reserved for future Supabase Admin API use. **Never** expose this key to
+  a client — it's only ever sent from this backend to Supabase, never
+  returned in any response.
 - `DATABASE_URL` — Database → Connection string → URI. Use the **direct**
   connection (port `5432`), not the pooler (port `6543`) — asyncpg's prepared
   statements can misbehave against Supabase's transaction-mode pooler. Use
@@ -101,30 +149,28 @@ Visit `http://localhost:8000/docs` for interactive API docs.
 
 ## 6. Getting a bearer token to test with
 
-Sign-in is Google-OAuth-only, so there's no password/magic-link shortcut for
-grabbing a token — you need to complete a real OAuth redirect once. Save this
-as a local HTML file (fill in your project URL/anon key from API settings),
-open it in a browser, and click the button:
+**Easiest path — email/password via `POST /auth/login`:**
 
-```html
-<!doctype html>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<button id="go">Sign in with Google</button>
-<script>
-  const supabase = window.supabase.createClient(
-    "https://<project-ref>.supabase.co",
-    "<anon-public-key>" // API settings -> Project API keys -> anon/public
-  );
-  document.getElementById("go").onclick = () =>
-    supabase.auth.signInWithOAuth({ provider: "google" });
-  supabase.auth.onAuthStateChange((_event, session) => {
-    if (session) console.log("ACCESS TOKEN:", session.access_token);
-  });
-</script>
-```
+1. Create a test user in the Supabase dashboard: Authentication → Users →
+   Add User. Set an email + password, and check **"Auto Confirm User"** so
+   there's no email-verification step in the way.
+2. Get a token with plain curl, no browser needed:
+   ```bash
+   curl -s -X POST http://localhost:8000/auth/login \
+     -H "Content-Type: application/json" \
+     -d '{"email":"you@example.com","password":"your-password"}'
+   ```
+   This returns `{access_token, refresh_token, token_type, expires_in}`.
+   There's no `POST /auth/signup` — this endpoint only logs in users that
+   already exist, created via the dashboard as above.
 
-After signing in, copy the access token logged to the browser console and use
-it as `$TOKEN` below. It expires (default 1 hour) — repeat if needed.
+**Google OAuth** remains the real production sign-in path for actual
+employees, but there's no API-only way to test it — it requires a real
+browser OAuth redirect. Testing it is deferred until the frontend exists;
+`/auth/login` above covers all API testing needs until then.
+
+Use the access token from `/auth/login` as `$TOKEN` below. Tokens expire
+(default 1 hour) — get a fresh one if requests start 401ing.
 
 ## Why RLS isn't the enforcement layer
 
@@ -138,8 +184,13 @@ a future frontend querying Supabase directly with a user's own JWT.
 ## curl examples
 
 ```bash
-TOKEN="<paste access_token from section 6>"
 BASE_URL="http://localhost:8000"
+
+# Log in (email/password test user) and grab the token in one go
+TOKEN=$(curl -s -X POST "$BASE_URL/auth/login" \
+  -H "Content-Type: application/json" \
+  -d '{"email":"you@example.com","password":"your-password"}' \
+  | python -c "import sys, json; print(json.load(sys.stdin)['access_token'])")
 
 # Current user's profile + roles
 curl -s "$BASE_URL/auth/me" \

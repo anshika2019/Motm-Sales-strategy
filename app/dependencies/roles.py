@@ -1,22 +1,22 @@
-import asyncpg
-from fastapi import Depends, HTTPException, status
+from uuid import UUID
 
-from app.db.session import get_db_connection
+from fastapi import Depends, HTTPException, status
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db.models import UserRole
+from app.db.session import get_db_session
 from app.dependencies.auth import CurrentUser, get_current_user
 from app.models.schemas import AppRole
 
 
-async def fetch_active_roles(conn: asyncpg.Connection, user_id) -> list[str]:
-    rows = await conn.fetch(
-        """
-        SELECT role::text AS role
-        FROM public.user_roles
-        WHERE user_id = $1 AND revoked_at IS NULL
-        ORDER BY role
-        """,
-        user_id,
+async def fetch_active_roles(session: AsyncSession, user_id: UUID) -> list[AppRole]:
+    result = await session.execute(
+        select(UserRole.role)
+        .where(UserRole.user_id == user_id, UserRole.revoked_at.is_(None))
+        .order_by(UserRole.role)
     )
-    return [row["role"] for row in rows]
+    return list(result.scalars().all())
 
 
 def require_role(*roles: AppRole):
@@ -24,13 +24,13 @@ def require_role(*roles: AppRole):
     nested get_current_user dependency), 403s if the caller holds none of
     the given roles, otherwise returns the CurrentUser."""
 
-    allowed = {role.value for role in roles}
+    allowed = set(roles)
 
     async def dependency(
         current_user: CurrentUser = Depends(get_current_user),
-        conn: asyncpg.Connection = Depends(get_db_connection),
+        session: AsyncSession = Depends(get_db_session),
     ) -> CurrentUser:
-        active_roles = await fetch_active_roles(conn, current_user.id)
+        active_roles = await fetch_active_roles(session, current_user.id)
         if allowed.isdisjoint(active_roles):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

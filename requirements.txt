@@ -1,7 +1,15 @@
 fastapi>=0.115
 uvicorn[standard]>=0.30
 asyncpg>=0.29
-pyjwt>=2.9
+pyjwt[crypto]>=2.9
 pydantic>=2.7
 pydantic-settings>=2.4
 python-dotenv>=1.0
+httpx2>=2.10
+sqlalchemy[asyncio]>=2.0
+alembic>=1.13
+pgvector>=0.3
+sentence-transformers>=3.0
+google-genai>=1.0
+openai>=1.50
+beautifulsoup4>=4.12
