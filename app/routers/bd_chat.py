@@ -100,10 +100,10 @@ from app.routers.chat import (
 from app.services.embeddings import embed_texts
 from app.services.knowledge import fetch_known_problem_types
 from app.services.llm import (
+    classify_bd_situation,
     classify_message_intent,
-    classify_situation,
-    detect_methodology,
-    enrich_situation,
+    detect_bd_methodology,
+    enrich_bd_situation,
     expand_queries,
     extract_website_url_from_text,
     generate_bd_hiring_signal_analysis,
@@ -119,6 +119,27 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/bd-chat", tags=["bd-chat"])
 
+# BD counterpart of chat._INTENT_REPLIES -- same two keys (so the `intent in
+# _INTENT_REPLIES` membership checks reused from chat.py still work
+# unchanged against classify_message_intent()'s output), but phrased for
+# BD selling MOTM itself rather than SE's "prospect's website/product"
+# framing. Used by _build_bd_intent_shortcircuit() below instead of the
+# imported _INTENT_REPLIES.
+_BD_GREETING_REPLY = (
+    "Hi! I'm your BD Sales Director. Tell me what's happening with a "
+    "prospect -- a conversation, an objection, an account you're trying to "
+    "open -- and I'll help you build a strategy or outreach message. Or "
+    "share a job posting and I'll turn it into an outreach message for "
+    "that hiring company."
+)
+_BD_OFF_TOPIC_REPLY = (
+    "I can only help with MOTM's business development -- prospect "
+    "conversations, objections, outreach messaging, and hiring-signal "
+    "outreach. Share a BD situation you're working on and I'll help you "
+    "build a plan."
+)
+_BD_INTENT_REPLIES = {"greeting": _BD_GREETING_REPLY, "off_topic": _BD_OFF_TOPIC_REPLY}
+
 require_motm_bd = require_role(AppRole.motm_bd)
 
 # BD's knowledge-base scope: MOTM's own BD knowledge (positioning, pricing,
@@ -128,11 +149,51 @@ require_motm_bd = require_role(AppRole.motm_bd)
 _BD_KNOWLEDGE_PERSONAS = (KnowledgePersona.motm_bd, KnowledgePersona.shared)
 
 # Fixed "product" label threaded through the SE-pipeline helpers that take a
-# `product` argument (enrich_situation, classify_situation, expand_queries,
+# `product` argument (enrich_bd_situation, classify_situation, expand_queries,
 # summarize_company) -- BD never sells a variable per-conversation product
 # the way SE does, it always sells this one thing, so there is nothing for
 # the user to supply here.
-_BD_PRODUCT_LABEL = "MOTM's own B2B sourcing / manufacturing / vendor-development service"
+_BD_PRODUCT_LABEL = "MOTM Revenue Growth Partner BD services"
+
+# Anchor queries prepended to the LLM-generated search_queries when no
+# prospect website is present -- generic sales-language queries (the LLM's
+# default output for a "no prospect" situation) don't surface the MOTM
+# knowledge cards, which use MOTM-specific vocabulary (retainer model,
+# offer engineering, 4D methodology, etc).
+_BD_NO_PROSPECT_ANCHOR_QUERIES = [
+    "MOTM retainer model cross functional team",
+    "MOTM offer engineering scope accountability governance",
+    "MOTM responsibility boundary what client owns",
+    "MOTM cross functional team capability specialist roles",
+    "MOTM 4D methodology diagnose design deliver drive",
+]
+
+# problem_types that must always go to Route A (BD_STRATEGY_NARRATIVE_PROMPT
+# via generate_bd_strategy()/generate_bd_narrative_strategy()) even when the
+# shared, SE-written resolve_output_format()/detect_output_format() reads
+# the phrasing as a pitch/outreach request -- e.g. "I don't need another
+# sales agency, what will you be accountable for?" contains objection-
+# shaped language ("I don't need another...") that classifier has no BD
+# context to distinguish from an actual "draft me an objection response"
+# ask. These are all information/accountability/objection-analysis problem
+# types, never message_generation types, so genuine pitch requests ("write
+# me a cold call script") are unaffected -- see _resolve_bd_output_format().
+_BD_STRATEGY_ONLY_PROBLEM_TYPES = {
+    "accountability",
+    "scope_clarity",
+    "intangible_offer",
+    "tried_agencies",
+    "does_not_understand_motm",
+    "motm_information",
+    "credibility_question",
+    "reference_request",
+    "commercial_integrity",
+    "diagnosis",
+    "team_capability_question",
+    "geographic_coverage",
+    "qualification",
+    "no_clear_strategy",
+}
 
 
 async def _get_bd_conversation_or_404(
@@ -463,13 +524,11 @@ async def _run_bd_pre_generation_pipeline(
             prospect_website = prior_context.get("website_url") or ""
         if situation_raw and not _is_formatting_only_followup(situation_raw):
             candidate_types = await fetch_known_problem_types(session)
-            classification = await classify_situation(
+            classification = await classify_bd_situation(
                 enriched_situation, _BD_PRODUCT_LABEL, candidate_types
             )
             prior_context = {**prior_context, "classification": classification}
     else:
-        enriched_situation = await enrich_situation(situation_raw, _BD_PRODUCT_LABEL)
-
         if not prospect_website:
             extraction_source = body.raw_message or situation_raw
             if extraction_source:
@@ -499,9 +558,18 @@ async def _run_bd_pre_generation_pipeline(
         # generate_bd_strategy()/generate_bd_narrative_strategy().
         company_snapshot_raw = await summarize_company(pages, _BD_PRODUCT_LABEL) if pages else ""
 
+        # Enrichment runs AFTER the scrape/summarize above (unlike SE's
+        # equivalent step) so company_snapshot_raw actually exists by the
+        # time enrich_bd_situation() decides whether to fold company
+        # context into the rewritten situation -- see that function's
+        # docstring in llm.py.
+        enriched_situation = await enrich_bd_situation(
+            situation_raw, _BD_PRODUCT_LABEL, company_snapshot_raw, prospect_website
+        )
+
         candidate_types = await fetch_known_problem_types(session)
-        classification = await classify_situation(situation_raw, _BD_PRODUCT_LABEL, candidate_types)
-        methodology_hint = await detect_methodology(enriched_situation)
+        classification = await classify_bd_situation(situation_raw, _BD_PRODUCT_LABEL, candidate_types)
+        methodology_hint = await detect_bd_methodology(enriched_situation)
 
     if is_focused_followup:
         search_queries: list[str] = []
@@ -510,6 +578,8 @@ async def _run_bd_pre_generation_pipeline(
         search_queries = await expand_queries(
             enriched_situation, _BD_PRODUCT_LABEL, classification, methodology_hint
         )
+        if not prospect_website:
+            search_queries = _BD_NO_PROSPECT_ANCHOR_QUERIES + search_queries
         anchor_parts = []
         if classification.get("problem_type"):
             anchor_parts.append(classification["problem_type"].replace("_", " "))
@@ -518,6 +588,7 @@ async def _run_bd_pre_generation_pipeline(
         if classification.get("buyer_persona"):
             anchor_parts.append(classification["buyer_persona"].replace("_", " "))
         search_queries.append(" ".join(anchor_parts))
+        search_queries = search_queries[:10]
         query_embeddings = embed_texts(search_queries)
         [rerank_embedding] = embed_texts([enriched_situation])
         retrieved = await _retrieve_cards(
@@ -617,7 +688,7 @@ async def _build_bd_intent_shortcircuit(
     )
     session.add(user_message)
 
-    reply_text = _INTENT_REPLIES[intent]
+    reply_text = _BD_INTENT_REPLIES[intent]
     message = Message(
         conversation_id=conversation_id,
         sender=MessageSender.assistant,
@@ -747,7 +818,7 @@ async def _prepare_bd_direct_pitch_intent(
         prior_context = _merge_followup_situation(prior_context, situation_raw)
         if not _is_formatting_only_followup(situation_raw):
             candidate_types = await fetch_known_problem_types(session)
-            classification = await classify_situation(
+            classification = await classify_bd_situation(
                 prior_context["enriched_situation"], _BD_PRODUCT_LABEL, candidate_types
             )
             prior_context = {**prior_context, "classification": classification}
@@ -785,6 +856,31 @@ async def _handle_bd_direct_pitch_intent(
     )
 
 
+async def _resolve_bd_output_format(
+    session: AsyncSession, conversation_id: UUID, intent_text: str, is_followup: bool
+) -> str:
+    """BD-aware wrapper around resolve_output_format(). The shared,
+    SE-written classifier has no notion of BD's problem_type taxonomy, so
+    an information/accountability question phrased with objection-shaped
+    language (e.g. "I don't need another sales agency, what will you be
+    accountable for?") can get classified as "sales_pitch_objection" and
+    routed to generate_pitch() -- bypassing BD_STRATEGY_NARRATIVE_PROMPT
+    and every BD-specific guardrail in _run_bd_pre_generation_pipeline()
+    (classify_bd_situation, detect_bd_methodology, the anchor queries).
+
+    Only runs the extra classification call when resolve_output_format()
+    didn't already say "strategy_only", since that's the only case the
+    guard can change anything -- the common case costs nothing extra.
+    """
+    output_format = await resolve_output_format(session, conversation_id, intent_text, is_followup)
+    if output_format != "strategy_only" and intent_text:
+        candidate_types = await fetch_known_problem_types(session)
+        routing_classification = await classify_bd_situation(intent_text, _BD_PRODUCT_LABEL, candidate_types)
+        if routing_classification.get("problem_type") in _BD_STRATEGY_ONLY_PROBLEM_TYPES:
+            output_format = "strategy_only"
+    return output_format
+
+
 @router.post(
     "/conversations/{conversation_id}/strategy",
     response_model=StrategyResponse | MessageResponse,
@@ -813,7 +909,7 @@ async def post_bd_strategy(
             )
 
     intent_text = (body.raw_message or situation_raw or "").strip()
-    output_format = await resolve_output_format(session, conversation_id, intent_text, is_followup)
+    output_format = await _resolve_bd_output_format(session, conversation_id, intent_text, is_followup)
     if output_format != "strategy_only":
         return await _handle_bd_direct_pitch_intent(
             session, conversation, conversation_id, body, situation_raw, prior_context, current_user, output_format
@@ -843,6 +939,7 @@ async def post_bd_strategy(
         context_entries=[entry for entry, _ in ctx.retrieved],
         conversation_memory=ctx.memory_context,
         feedback_context=ctx.feedback_context,
+        website_url=ctx.website_url,
     )
     strategy_fields.pop("company_snapshot")
     strategy_fields.pop("situation_classification")
@@ -935,7 +1032,7 @@ async def post_bd_strategy_stream(
             )
 
     intent_text = (body.raw_message or situation_raw or "").strip()
-    output_format = await resolve_output_format(session, conversation_id, intent_text, is_followup)
+    output_format = await _resolve_bd_output_format(session, conversation_id, intent_text, is_followup)
     if output_format != "strategy_only":
         prepared = await _prepare_bd_direct_pitch_intent(
             session, conversation, conversation_id, body, situation_raw, prior_context, current_user, output_format
@@ -988,6 +1085,7 @@ async def post_bd_strategy_stream(
                 focused_followup=ctx.is_focused_followup,
                 enriched_situation=ctx.enriched_situation,
                 conversation_history=conversation_history,
+                website_url=ctx.website_url,
             ):
                 narrative_parts.append(delta)
                 yield sse("narrative_chunk", {"delta": delta})

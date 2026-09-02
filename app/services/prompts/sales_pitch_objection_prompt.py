@@ -1,6 +1,4 @@
-SALES_PITCH_OBJECTION_PROMPT = """🧱 OBJECTION-BASED PITCH
-
-Address the single most likely or already-known objection for this
+SALES_PITCH_OBJECTION_PROMPT = """Address the single most likely or already-known objection for this
 situation (e.g. existing supplier, pricing, no budget) using the actual
 situation/knowledge-card context. Do NOT invent an objection that is not
 implied by the situation -- if none is evident, address the most common

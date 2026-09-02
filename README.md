@@ -141,11 +141,28 @@ system has none — so the very first admin has to be created by hand:
 
 ## 5. Run the server
 
+The frontend dev server runs over HTTPS (`@vitejs/plugin-basic-ssl`), so
+the backend needs to as well -- an HTTPS page fetching a plain-HTTP API is
+mixed content and gets blocked/failed by the browser. Generate a local
+self-signed cert once:
+
 ```bash
-uvicorn app.main:app --reload
+mkdir -p certs
+openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+  -keyout certs/localhost-key.pem -out certs/localhost.pem \
+  -subj "/CN=localhost" \
+  -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
 ```
 
-Visit `http://localhost:8000/docs` for interactive API docs.
+Then run the server with it:
+
+```bash
+uvicorn app.main:app --reload --ssl-keyfile=certs/localhost-key.pem --ssl-certfile=certs/localhost.pem
+```
+
+Visit `https://localhost:8000/docs` for interactive API docs -- the first
+visit will show a browser warning since the cert is self-signed (same as
+the frontend already requires); accept it once per session.
 
 ## 6. Getting a bearer token to test with
 

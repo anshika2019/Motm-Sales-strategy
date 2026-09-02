@@ -6,6 +6,8 @@
 # import X` call sites don't need to change.
 from app.services.prompts.bd_hiring_signal_prompt import BD_HIRING_SIGNAL_ANALYSIS_PROMPT
 from app.services.prompts.bd_hiring_signal_outreach_prompt import BD_HIRING_SIGNAL_OUTREACH_PROMPT
+from app.services.prompts.bd_methodology_detection_prompt import BD_METHODOLOGY_DETECTION_PROMPT
+from app.services.prompts.bd_situation_enrichment_prompt import BD_SITUATION_ENRICHMENT_PROMPT
 from app.services.prompts.bd_strategy_narrative_prompt import BD_STRATEGY_NARRATIVE_PROMPT
 from app.services.prompts.cold_call_section_template import COLD_CALL_SECTION_TEMPLATE
 from app.services.prompts.conversation_memory_prompt import CONVERSATION_MEMORY_PROMPT
@@ -38,6 +40,8 @@ from app.services.prompts.whatsapp_section_template import WHATSAPP_SECTION_TEMP
 __all__ = [
     "BD_HIRING_SIGNAL_ANALYSIS_PROMPT",
     "BD_HIRING_SIGNAL_OUTREACH_PROMPT",
+    "BD_METHODOLOGY_DETECTION_PROMPT",
+    "BD_SITUATION_ENRICHMENT_PROMPT",
     "BD_STRATEGY_NARRATIVE_PROMPT",
     "COLD_CALL_SECTION_TEMPLATE",
     "CONVERSATION_MEMORY_PROMPT",

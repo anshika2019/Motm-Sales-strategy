@@ -12,7 +12,9 @@ interface HiringSignalComposerProps {
 // matching BDHiringSignalRequest. Per the backend, at least one of
 // company_name/company_website/job_post_text is required; the rest are
 // optional ("use available information intelligently" -- see the router's
-// rejection message for an empty request).
+// rejection message for an empty request). Grouped into labeled sections
+// below purely for visual breathing room -- same fields, same submit
+// payload, same validation as before.
 export default function HiringSignalComposer({ onSubmit, disabled, onCancel }: HiringSignalComposerProps) {
   const [companyName, setCompanyName] = useState("");
   const [companyWebsite, setCompanyWebsite] = useState("");
@@ -50,60 +52,88 @@ export default function HiringSignalComposer({ onSubmit, disabled, onCancel }: H
 
   return (
     <form className="chat-composer" onSubmit={handleSubmit}>
-      <div className="composer-context-panel" style={{ display: "flex" }}>
-        <span className="composer-context-label">
-          Approach a company that's hiring — company name, website, or the job post is required, the rest is optional:
-        </span>
-        <input
-          type="text"
-          className="composer-context-input"
-          placeholder="Company name"
-          value={companyName}
-          onChange={(e) => setCompanyName(e.target.value)}
-        />
-        <input
-          type="text"
-          className="composer-context-input"
-          placeholder="Company website"
-          value={companyWebsite}
-          onChange={(e) => setCompanyWebsite(e.target.value)}
-        />
-        <input
-          type="text"
-          className="composer-context-input"
-          placeholder="Hiring role (e.g. Sales Engineer)"
-          value={hiringRole}
-          onChange={(e) => setHiringRole(e.target.value)}
-        />
-        <input
-          type="text"
-          className="composer-context-input"
-          placeholder="Location"
-          value={location}
-          onChange={(e) => setLocation(e.target.value)}
-        />
-        <input
-          type="text"
-          className="composer-context-input"
-          placeholder="Contact details (if known)"
-          value={contactDetails}
-          onChange={(e) => setContactDetails(e.target.value)}
-        />
-        <input
-          type="text"
-          className="composer-context-input"
-          placeholder="Your name (to sign messages as)"
-          value={senderName}
-          onChange={(e) => setSenderName(e.target.value)}
-        />
+      <div className="hiring-form-header">
+        <h3 className="hiring-form-title">Approach a company that's hiring</h3>
+        <p className="hiring-form-subtitle">
+          Turn a hiring signal into an outreach message. Company name, website, or the job post is
+          required — everything else is optional.
+        </p>
+      </div>
+
+      <div className="hiring-form-section">
+        <div className="hiring-form-section-label">Company details</div>
+        <div className="hiring-form-grid">
+          <input
+            type="text"
+            className="composer-context-input"
+            placeholder="Company name"
+            value={companyName}
+            onChange={(e) => setCompanyName(e.target.value)}
+          />
+          <input
+            type="text"
+            className="composer-context-input"
+            placeholder="Company website"
+            value={companyWebsite}
+            onChange={(e) => setCompanyWebsite(e.target.value)}
+          />
+        </div>
+      </div>
+
+      <div className="hiring-form-section">
+        <div className="hiring-form-section-label">Hiring details</div>
+        <div className="hiring-form-grid">
+          <input
+            type="text"
+            className="composer-context-input"
+            placeholder="Hiring role (e.g. Sales Engineer)"
+            value={hiringRole}
+            onChange={(e) => setHiringRole(e.target.value)}
+          />
+          <input
+            type="text"
+            className="composer-context-input"
+            placeholder="Location"
+            value={location}
+            onChange={(e) => setLocation(e.target.value)}
+          />
+        </div>
+      </div>
+
+      <div className="hiring-form-section">
+        <div className="hiring-form-section-label">Contact details</div>
+        <div className="hiring-form-grid">
+          <input
+            type="text"
+            className="composer-context-input"
+            placeholder="Contact details (if known)"
+            value={contactDetails}
+            onChange={(e) => setContactDetails(e.target.value)}
+          />
+          <input
+            type="text"
+            className="composer-context-input"
+            placeholder="Your name (to sign messages as)"
+            value={senderName}
+            onChange={(e) => setSenderName(e.target.value)}
+          />
+        </div>
+      </div>
+
+      <div className="hiring-form-section">
+        <div className="hiring-form-section-label">Job post / LinkedIn</div>
         <textarea
           className="composer-context-input"
-          style={{ flexBasis: "100%", resize: "vertical" }}
+          style={{ resize: "vertical" }}
           placeholder="Paste the job post / LinkedIn text here (optional but helps a lot)"
           value={jobPostText}
           onChange={(e) => setJobPostText(e.target.value)}
-          rows={3}
+          rows={4}
         />
+      </div>
+
+      <div className="hiring-form-section">
+        <div className="hiring-form-section-label">Additional notes</div>
         <input
           type="text"
           className="composer-context-input"

@@ -76,6 +76,14 @@ class Profile(Base):
     # default schema as schema=None -- setting "public" explicitly here
     # would make autogenerate see the model and the reflected DB table as
     # schema='public' vs schema=None and misreport a spurious diff.
+    __table_args__ = (
+        Index(
+            "profiles_username_unique",
+            "username",
+            unique=True,
+            postgresql_where=text("username IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -84,6 +92,18 @@ class Profile(Base):
     )
     email: Mapped[str] = mapped_column(Text, nullable=False)
     full_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Display-only handle, self-set from the Settings page (PATCH /auth/me
+    # in app/routers/auth.py) -- never used for login (that's always email
+    # via Supabase). Nullable (existing rows have none) and unique when set;
+    # a partial unique index (below) lets multiple rows stay NULL at once,
+    # which a plain unique constraint would not allow.
+    username: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Self-service signups (POST /auth/signup) start unapproved and can't
+    # log in until an admin approves them (POST /admin/users/{id}/approve)
+    # -- see login()'s approval check in app/routers/auth.py. Defaults to
+    # false so the on_auth_user_created trigger's insert (which doesn't set
+    # this column) always starts a new account pending.
+    is_approved: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

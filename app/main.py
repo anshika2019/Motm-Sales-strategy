@@ -1,22 +1,49 @@
+import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.config import settings
 from app.db.session import engine
+from app.logging_config import configure_logging
 from app.routers import admin, auth, bd_chat, chat
 from app.services.embeddings import warm_up_model
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    configure_logging()
     warm_up_model()
     yield
     await engine.dispose()
 
 
 app = FastAPI(title="MOTM AI Sales Director — Auth Service", lifespan=lifespan)
+
+
+@app.exception_handler(HTTPException)
+async def _log_http_exception(request, exc: HTTPException):
+    """Adds visibility into handled errors (bad login, 409 conflicts, etc.)
+    without changing the response FastAPI would already send."""
+    logger.warning(
+        "HTTP %s on %s %s: %s", exc.status_code, request.method, request.url.path, exc.detail
+    )
+    return await http_exception_handler(request, exc)
+
+
+@app.exception_handler(Exception)
+async def _log_unhandled_exception(request, exc: Exception):
+    """Safety net for bugs that escape a route handler. Does not affect the
+    'log and continue' pattern used by chat.py/bd_chat.py's background
+    tasks, since those run via BackgroundTasks after the response is
+    already sent -- outside this handler's request/response cycle."""
+    logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 # Allows the local Vite dev server to call this API from a different origin.
 # Vite picks the next free port (5173, 5174, ...) if the default is taken, so

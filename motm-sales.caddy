@@ -1,0 +1,29 @@
+motm-sales.b2botix.ai {
+	handle /auth/* {
+		reverse_proxy 127.0.0.1:4020
+	}
+	handle /admin/* {
+		reverse_proxy 127.0.0.1:4020
+	}
+	handle /chat/* {
+		reverse_proxy 127.0.0.1:4020
+	}
+	handle /bd-chat/* {
+		reverse_proxy 127.0.0.1:4020
+	}
+	handle /health {
+		reverse_proxy 127.0.0.1:4020
+	}
+	handle /docs* {
+		reverse_proxy 127.0.0.1:4020
+	}
+	handle /openapi.json {
+		reverse_proxy 127.0.0.1:4020
+	}
+	handle /redoc* {
+		reverse_proxy 127.0.0.1:4020
+	}
+	handle {
+		reverse_proxy 127.0.0.1:4021
+	}
+}

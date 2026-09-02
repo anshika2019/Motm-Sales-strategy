@@ -81,3 +81,21 @@ async def get_current_user(
         )
 
     return CurrentUser(id=user_id, email=email)
+
+
+async def get_bearer_token(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
+) -> str:
+    """Returns the caller's raw bearer token string rather than the decoded
+    CurrentUser get_current_user returns -- for routes that need to proxy
+    the caller's OWN Supabase session token to a Supabase endpoint (e.g.
+    PUT /auth/v1/user for the Settings page's self-service email/password
+    updates in app/routers/auth.py), where Supabase itself must authenticate
+    the request as that user rather than us decoding it locally."""
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing bearer token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return credentials.credentials

@@ -2,6 +2,7 @@ import json
 import logging
 import re
 from collections.abc import AsyncIterator
+from urllib.parse import urlparse
 
 from google import genai
 from google.genai import errors, types
@@ -14,6 +15,8 @@ from app.services.usage_tracking import record_usage
 from app.services.prompts import (
     BD_HIRING_SIGNAL_ANALYSIS_PROMPT,
     BD_HIRING_SIGNAL_OUTREACH_PROMPT,
+    BD_METHODOLOGY_DETECTION_PROMPT,
+    BD_SITUATION_ENRICHMENT_PROMPT,
     BD_STRATEGY_NARRATIVE_PROMPT,
     COLD_CALL_SECTION_TEMPLATE,
     CONVERSATION_MEMORY_PROMPT,
@@ -107,6 +110,21 @@ def _format_context(context_entries: list[KnowledgeEntry]) -> str:
     )
 
 
+def _format_bd_context(context_entries: list[KnowledgeEntry]) -> str:
+    """BD-only counterpart of _format_context() -- includes the card's
+    metadata "source" document name (e.g. "MOTM Complete Knowledge Base")
+    alongside title/content, since BD_STRATEGY_NARRATIVE_PROMPT's citation
+    discipline (Section 5) requires "Source Document -- Card Title" and has
+    no source name to cite without this. SE's _format_context()/
+    format_context() are untouched -- SE's prompt doesn't need this field."""
+    return "\n\n".join(
+        f"Source: {entry.metadata_.get('source', 'Unknown')}\n"
+        f"Title: {entry.title}\n"
+        f"Content: {entry.content[:_CARD_CONTENT_CHAR_LIMIT]}"
+        for entry in context_entries
+    )
+
+
 def _record_gemini_usage(response, call_name: str) -> None:
     """Shared by every Gemini generate_content() call site below --
     usage_metadata is None only in the (rare) case the API returned no
@@ -191,6 +209,71 @@ def _format_company_snapshot(snapshot_raw: str) -> str:
     except (json.JSONDecodeError, TypeError):
         # snapshot was not valid JSON — return as-is
         return snapshot_raw
+
+
+def _domain_label(website_url: str) -> str:
+    """Bare domain for a display label, e.g. "https://www.mehtahydraulics.com/"
+    -> "mehtahydraulics.com". Mirrors BDComposer.tsx's domainLabel() so the
+    same website reads identically in the UI pill and in the prompt."""
+    host = urlparse(website_url if "://" in website_url else f"//{website_url}").netloc
+    return host[4:] if host.lower().startswith("www.") else host
+
+
+def _format_bd_company_snapshot(snapshot_raw: str, website_url: str) -> str:
+    """BD-only counterpart of _format_company_snapshot(). Unlike that
+    function's plain field listing (still used as-is by the SE pipeline),
+    this renders the same summarize_company() JSON as an explicit
+    VERIFIED (from website) / INFERENCE (sales hypotheses) split, per the
+    task brief's fact-discipline requirement -- BD_STRATEGY_NARRATIVE_PROMPT's
+    "## Company Understanding" section is instructed to ground itself in
+    this VERIFIED block specifically (see SECTION 27), which the old plain
+    formatting didn't make visually authoritative enough to reliably win out
+    over the BD rep's own situation text. Falls back to the raw string on
+    parse failure, same contract as _format_company_snapshot."""
+    try:
+        data = json.loads(snapshot_raw)
+    except (json.JSONDecodeError, TypeError):
+        return snapshot_raw
+
+    domain = _domain_label(website_url) if website_url else "unknown"
+    lines = [f"COMPANY CONTEXT (from website: {domain})", ""]
+
+    verified: list[str] = []
+    if data.get("company_name"):
+        verified.append(f"Company: {data['company_name']}")
+    if data.get("what_they_do"):
+        verified.append(f"What they do: {data['what_they_do']}")
+    if data.get("products_or_services"):
+        verified.append(f"Products: {', '.join(data['products_or_services'])}")
+    if data.get("manufacturing_capabilities"):
+        verified.append(f"Manufacturing capabilities: {', '.join(data['manufacturing_capabilities'])}")
+    if data.get("certifications"):
+        verified.append(f"Certifications: {data['certifications']}")
+    if data.get("company_size_signals"):
+        verified.append(f"Company size: {data['company_size_signals']}")
+    if data.get("probable_buyer_personas"):
+        verified.append(f"Buyer personas: {', '.join(data['probable_buyer_personas'])}")
+    for fact in data.get("facts_from_website", []):
+        verified.append(fact)
+
+    if verified:
+        lines.append("VERIFIED (from website):")
+        lines.extend(f"- {v}" for v in verified)
+        lines.append("")
+
+    hypotheses = data.get("sales_hypotheses", [])
+    if hypotheses:
+        lines.append("INFERENCE (sales hypotheses from website analysis):")
+        lines.extend(f"- {h}" for h in hypotheses)
+        lines.append("")
+
+    red_flags = data.get("red_flags", [])
+    if red_flags:
+        lines.append("Red flags:")
+        lines.extend(f"- {r}" for r in red_flags)
+        lines.append("")
+
+    return "\n".join(lines).rstrip()
 
 
 def extract_company_name(snapshot_raw: str) -> str | None:
@@ -541,6 +624,34 @@ async def enrich_situation(situation: str, product: str) -> str:
     return response.text.strip()
 
 
+async def enrich_bd_situation(
+    situation: str, product: str, company_snapshot_raw: str, website_url: str = ""
+) -> str:
+    """BD counterpart of enrich_situation() -- swaps in
+    BD_SITUATION_ENRICHMENT_PROMPT, which (unlike SE's
+    SITUATION_ENRICHMENT_PROMPT, left untouched) requires the rewrite to
+    name the company and situate the situation in its context whenever a
+    company snapshot is available. Callers must call this AFTER the
+    website scrape/summarize_company() step so company_snapshot_raw is
+    actually populated by the time enrichment runs -- see
+    _run_bd_pre_generation_pipeline()'s reordering in bd_chat.py."""
+    company_context = (
+        _format_bd_company_snapshot(company_snapshot_raw, website_url)
+        if company_snapshot_raw
+        else "(no company snapshot available)"
+    )
+    response = await _client.aio.models.generate_content(
+        model=_MODEL_GEMINI,
+        contents=f"COMPANY SNAPSHOT:\n{company_context}\n\nProduct: {product}\nSituation: {situation}",
+        config=types.GenerateContentConfig(
+            system_instruction=BD_SITUATION_ENRICHMENT_PROMPT,
+            thinking_config=_THINKING_MINIMAL,
+        ),
+    )
+    _record_gemini_usage(response, "enrich_bd_situation")
+    return response.text.strip()
+
+
 async def extract_product_from_text(text: str) -> str:
     """Pulls a product/service description out of free-form text (the
     user's raw chat message) when it wasn't supplied as a separate
@@ -619,7 +730,37 @@ async def detect_methodology(situation: str) -> dict:
             )
         _record_gemini_usage(response, "detect_methodology")
         return json.loads(response.text)
-    except Exception:
+    except Exception as exc:
+        _logger.warning("detect_methodology failed, falling back to default: %s", exc)
+        return {"methodology": "General", "reason": "", "key_terms": []}
+
+
+async def detect_bd_methodology(situation: str) -> dict:
+    """BD counterpart of detect_methodology() -- swaps in
+    BD_METHODOLOGY_DETECTION_PROMPT, which adds a Trusted Advisor option and
+    guardrails restricting Never Split the Difference to genuine commercial
+    negotiation, so an accountability/scope/trust question about MOTM itself
+    doesn't get misrouted to a price-negotiation framework. SE's
+    detect_methodology() is unchanged."""
+    prompt = BD_METHODOLOGY_DETECTION_PROMPT.replace("{situation}", situation)
+    config = types.GenerateContentConfig(
+        response_mime_type="application/json",
+        max_output_tokens=200,
+        thinking_config=_THINKING_MINIMAL,
+    )
+    try:
+        try:
+            response = await _client.aio.models.generate_content(
+                model=_MODEL_GEMINI, contents=prompt, config=config
+            )
+        except errors.APIError:
+            response = await _client.aio.models.generate_content(
+                model=_MODEL_GEMINI, contents=prompt, config=config
+            )
+        _record_gemini_usage(response, "detect_bd_methodology")
+        return json.loads(response.text)
+    except Exception as exc:
+        _logger.warning("detect_bd_methodology failed, falling back to default: %s", exc)
         return {"methodology": "General", "reason": "", "key_terms": []}
 
 
@@ -978,7 +1119,8 @@ vocabulary listed above.
             if isinstance(parsed[key], list):
                 return parsed[key]
         return [situation]
-    except Exception:
+    except Exception as exc:
+        _logger.warning("expand_queries failed to parse response, falling back: %s", exc)
         return [situation]
 
 
@@ -1185,6 +1327,89 @@ Return ONLY a valid JSON object. No explanation before or after.
         ),
     )
     _record_gemini_usage(response, "classify_situation")
+
+    parsed = _extract_json(response.text)
+
+    # make sure problem_type is a known value — fallback gracefully
+    if parsed.get("problem_type") not in candidate_types:
+        parsed["problem_type"] = parsed.get("problem_type", "unknown")
+
+    return parsed
+
+
+async def classify_bd_situation(
+    situation: str,
+    product: str,
+    candidate_types: list[str],
+) -> dict:
+    """BD counterpart of classify_situation() -- same dict shape and same
+    fallback handling, but the "objective" field gets a guardrail against
+    inventing KPI/performance-metric commitments for accountability/scope
+    questions, since BD_STRATEGY_NARRATIVE_PROMPT's FABRICATION BAN
+    (Section 5) explicitly forbids the model from stating KPI numbers that
+    weren't confirmed -- an objective like "define measurable KPIs" was
+    handing the generation step a goal it isn't allowed to fulfill honestly.
+    SE's classify_situation() is unchanged."""
+    system_prompt = f"""
+You are a B2B Business Development situation analyst for MOTM.
+
+A MOTM Business Development employee has described their prospect
+situation. Read it carefully and extract structured information from it.
+
+ALLOWED VALUES:
+
+sales_stage — pick ONE:
+prospecting, initial_contact, first_meeting, discovery,
+qualification, proposal, negotiation, follow_up, stuck, revival
+
+problem_type — pick ONE from this list:
+{", ".join(candidate_types)}
+
+buyer_persona — extract from the situation text, pick ONE:
+purchase_manager, MD, CEO, engineer, design_head,
+vendor_development, plant_head, sales_head, gatekeeper, unknown
+
+objective — ONE short sentence: what does the BD employee
+need to achieve right now?
+
+  GUARDRAIL: if problem_type is "accountability", "scope_clarity", or
+  "intangible_offer", do NOT generate an objective like:
+    "Define specific measurable KPIs"
+    "Promise performance metrics"
+    "Commit to specific delivery targets"
+  Instead generate an objective like:
+    "Explain MOTM's governance and accountability structure --
+     weekly reviews, account movement visibility, and the
+     collaborative nature of final conversion -- without inventing
+     specific KPI numbers before scoping is complete"
+
+missing_information — list 2 to 3 important things the BD employee
+did NOT mention that would change the strategy.
+Examples: "whether the prospect has a defined budget",
+          "what was discussed in the previous conversation",
+          "whether a scoping call has been offered".
+If nothing important is missing, return [].
+
+Return ONLY a valid JSON object. No explanation before or after.
+
+{{
+  "sales_stage": "",
+  "problem_type": "",
+  "buyer_persona": "",
+  "objective": "",
+  "missing_information": []
+}}
+"""
+    response = await _client.aio.models.generate_content(
+        model=_MODEL_GEMINI,
+        contents=f"Product: {product}\nSituation: {situation}",
+        config=types.GenerateContentConfig(
+            system_instruction=system_prompt,
+            response_mime_type="application/json",
+            thinking_config=_THINKING_MINIMAL,
+        ),
+    )
+    _record_gemini_usage(response, "classify_bd_situation")
 
     parsed = _extract_json(response.text)
 
@@ -1563,16 +1788,17 @@ async def generate_bd_strategy(
     context_entries: list[KnowledgeEntry],
     conversation_memory: str = "",
     feedback_context: str = "",
+    website_url: str = "",
 ) -> dict:
     """BD counterpart of generate_strategy(). prospect_snapshot is "" (not
     "Unknown"-JSON like SE's company_snapshot always is) when no
     prospect_website was supplied for this turn -- callers must format it
-    themselves before interpolating (see _format_company_snapshot's
+    themselves before interpolating (see _format_bd_company_snapshot's
     "not valid JSON -> return as-is" fallback, which already handles an
     empty string safely by producing an empty formatted block)."""
-    context = _format_context(context_entries)
+    context = _format_bd_context(context_entries)
     prospect_context = (
-        _format_company_snapshot(prospect_snapshot)
+        _format_bd_company_snapshot(prospect_snapshot, website_url)
         if prospect_snapshot
         else "(no prospect website supplied -- work from the situation description only)"
     )
@@ -1623,7 +1849,11 @@ STRICT RULES:
 4. Cite knowledge cards you use as [1], [2] etc. inside the relevant text
    fields.
 5. Never invent facts about the prospect beyond the prospect snapshot, and
-   never invent facts about MOTM beyond the retrieved knowledge cards.
+   never invent facts about MOTM beyond the retrieved knowledge cards. When
+   the prospect snapshot below has a VERIFIED block, ground situation_summary
+   and whats_probably_going_on in it (company size, products/services,
+   buyer personas) rather than relying only on what the BD rep typed --
+   VERIFIED facts are the authoritative source for company facts.
 6. next_action must be ONE specific action -- never empty, never vague.
 7. what_not_to_do must contain ONLY mistake descriptions -- maximum 3
    items -- nothing else in that array.
@@ -1747,6 +1977,7 @@ async def generate_bd_narrative_strategy(
     focused_followup: bool = False,
     enriched_situation: str = "",
     conversation_history: list[dict] | None = None,
+    website_url: str = "",
 ) -> AsyncIterator[str]:
     """BD counterpart of generate_narrative_strategy() -- see that
     function's docstring for the streaming/provider-fallback contract,
@@ -1755,7 +1986,7 @@ async def generate_bd_narrative_strategy(
     follow-up" prompt with no rigid section format) since that prompt
     doesn't reference "company being sold" language."""
     prospect_context = (
-        _format_company_snapshot(prospect_snapshot)
+        _format_bd_company_snapshot(prospect_snapshot, website_url)
         if prospect_snapshot
         else "(no prospect website supplied -- work from the situation description only)"
     )
@@ -1769,7 +2000,7 @@ async def generate_bd_narrative_strategy(
         )
         max_output_tokens = 600
     else:
-        context = _format_context(context_entries)
+        context = _format_bd_context(context_entries)
         memory_block, feedback_block = _format_memory_and_feedback_blocks(
             conversation_memory, feedback_context
         )
@@ -1935,7 +2166,7 @@ async def generate_bd_hiring_signal_outreach(
     minus id/sources/signal_analysis (the router fills id/sources in from
     the persisted Message/MessageSource rows, and signal_analysis is
     stage 1's own return value, not part of this call's output)."""
-    context = _format_context(context_entries)
+    context = _format_bd_context(context_entries)
 
     system_prompt = BD_HIRING_SIGNAL_OUTREACH_PROMPT.format(
         signal_analysis=signal_analysis,

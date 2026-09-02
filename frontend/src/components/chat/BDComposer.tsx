@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from "react";
-import { AttachIcon, MicIcon, SendIcon } from "./icons";
+import { MicIcon, SendIcon } from "./icons";
 
 // BD's turn shape -- mirrors StrategyFormValues (ChatComposer.tsx) but with
 // prospect_company/prospect_website/contact_designation/opportunity_stage/
@@ -21,6 +21,11 @@ export interface BDStrategyFormValues {
 interface BDComposerProps {
   onSubmit: (values: BDStrategyFormValues) => void;
   disabled: boolean;
+  // Plain-chat mode (BDChatPage's default, unselected composer state) reuses
+  // this same component for its textarea/mic/send behavior but hides the
+  // optional prospect-details panel -- default true keeps existing "Describe
+  // a situation" tab behavior unchanged.
+  showDetailsPanel?: boolean;
 }
 
 const MAX_TEXTAREA_LINES = 5;
@@ -30,14 +35,13 @@ function domainLabel(url: string): string {
   return url.replace(/^https?:\/\//i, "").replace(/^www\./i, "").replace(/\/.*$/, "");
 }
 
-export default function BDComposer({ onSubmit, disabled }: BDComposerProps) {
+export default function BDComposer({ onSubmit, disabled, showDetailsPanel = true }: BDComposerProps) {
   const [message, setMessage] = useState("");
   const [prospectCompany, setProspectCompany] = useState("");
   const [prospectWebsite, setProspectWebsite] = useState("");
   const [contactDesignation, setContactDesignation] = useState("");
   const [opportunityStage, setOpportunityStage] = useState("");
   const [additionalContext, setAdditionalContext] = useState("");
-  const [isContextPanelOpen, setIsContextPanelOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [isListening, setIsListening] = useState(false);
   const recognitionRef = useRef<any>(null);
@@ -86,7 +90,6 @@ export default function BDComposer({ onSubmit, disabled }: BDComposerProps) {
     setContactDesignation("");
     setOpportunityStage("");
     setAdditionalContext("");
-    setIsContextPanelOpen(false);
   }
 
   const startListening = () => {
@@ -135,7 +138,7 @@ export default function BDComposer({ onSubmit, disabled }: BDComposerProps) {
 
   return (
     <div className="chat-composer">
-      {hasProspectPill && (
+      {showDetailsPanel && hasProspectPill && (
         <div className="composer-pills">
           <span className="pill pill-website">
             {prospectCompany.trim() || domainLabel(prospectWebsite.trim())}
@@ -146,7 +149,7 @@ export default function BDComposer({ onSubmit, disabled }: BDComposerProps) {
         </div>
       )}
 
-      {isContextPanelOpen && (
+      {showDetailsPanel && (
         <div className="composer-context-panel">
           <span className="composer-context-label">Optional prospect details:</span>
           <input
@@ -188,15 +191,6 @@ export default function BDComposer({ onSubmit, disabled }: BDComposerProps) {
       )}
 
       <div className="composer-bar">
-        <button
-          type="button"
-          className="composer-icon-button"
-          title="Add prospect details"
-          aria-label="Toggle context panel"
-          onClick={() => setIsContextPanelOpen((open) => !open)}
-        >
-          <AttachIcon />
-        </button>
         <textarea
           ref={textareaRef}
           className="composer-textarea"

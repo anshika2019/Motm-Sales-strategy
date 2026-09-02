@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+.env.local
+certs/
+.git/
+.gitignore
+README.md
+DEPLOY.md
+
+frontend/node_modules/
+frontend/dist/
+frontend/.env.local

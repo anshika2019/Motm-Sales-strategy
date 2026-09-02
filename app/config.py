@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     # Deployed frontend origin (e.g. https://motm-sales.vercel.app), added to
     # the CORS allow-list alongside localhost. Unset in local dev.
     frontend_origin: str | None = None
+    log_level: str = "INFO"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

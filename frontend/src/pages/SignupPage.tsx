@@ -15,7 +15,7 @@ const SIGNUP_ROLES: { role: AppRole; label: string; description: string }[] = [
 ];
 
 export default function SignupPage({ onSwitchToLogin }: { onSwitchToLogin: () => void }) {
-  const { signup, signupError, isSubmittingSignup } = useAuth();
+  const { signup, signupError, signupSuccessMessage, isSubmittingSignup } = useAuth();
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -25,6 +25,25 @@ export default function SignupPage({ onSwitchToLogin }: { onSwitchToLogin: () =>
     e.preventDefault();
     if (!fullName || !email || !password) return;
     void signup({ full_name: fullName, email, password, role });
+  }
+
+  if (signupSuccessMessage) {
+    return (
+      <div className="centered-screen">
+        <div className="auth-card">
+          <p className="brand">MOTM Sales Director</p>
+          <p className="brand-sub">Account created</p>
+          <p style={{ color: "var(--text-muted)", fontSize: 14, lineHeight: 1.5 }}>
+            {signupSuccessMessage}
+          </p>
+          <div style={{ marginTop: 20 }}>
+            <button type="button" className="primary-button" onClick={onSwitchToLogin}>
+              Back to sign in
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (

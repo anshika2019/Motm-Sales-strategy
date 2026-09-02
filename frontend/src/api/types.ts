@@ -12,11 +12,22 @@ export interface LoginRequest {
   password: string;
 }
 
+export interface RefreshRequest {
+  refresh_token: string;
+}
+
 export interface LoginResponse {
   access_token: string;
   refresh_token: string;
   token_type: string;
   expires_in: number;
+}
+
+// Returned by POST /auth/signup instead of a session -- a self-service
+// signup no longer logs the account in immediately, it's created pending
+// admin approval. See SignupPage.tsx / AuthContext.tsx's signup().
+export interface SignupResponse {
+  message: string;
 }
 
 // POST /auth/signup only accepts "motm_bd" or "motm_sales_engineer" for
@@ -34,8 +45,54 @@ export interface MeResponse {
   id: string;
   email: string;
   full_name: string | null;
+  username: string | null;
   created_at: string;
   roles: AppRole[];
+}
+
+// Settings page -- see SettingsPage.tsx / PATCH /auth/me in
+// app/routers/auth.py. Both optional: an omitted field is left untouched
+// server-side (unlike an empty string, which clears it).
+export interface UpdateProfileRequest {
+  full_name?: string | null;
+  username?: string | null;
+}
+
+// See PUT /auth/me/email in app/routers/auth.py -- starts Supabase's
+// email-change confirmation flow rather than applying immediately.
+export interface UpdateEmailRequest {
+  email: string;
+}
+
+export interface UpdateEmailResponse {
+  message: string;
+}
+
+// See PUT /auth/me/password in app/routers/auth.py.
+export interface UpdatePasswordRequest {
+  new_password: string;
+}
+
+export interface UpdatePasswordResponse {
+  message: string;
+}
+
+// Mirrors app/models/schemas.py's UserWithRoles -- one row of the admin
+// dashboard's user list (GET /admin/users). See AdminDashboardPage.tsx.
+export interface UserWithRoles {
+  id: string;
+  email: string;
+  full_name: string | null;
+  created_at: string;
+  roles: AppRole[];
+  is_approved: boolean;
+}
+
+// Mirrors app/models/schemas.py's ApprovalResponse -- POST
+// /admin/users/{id}/approve's response.
+export interface ApprovalResponse {
+  user_id: string;
+  is_approved: boolean;
 }
 
 export interface CreateConversationResponse {

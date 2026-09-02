@@ -1,5 +1,6 @@
 import type {
   ApiError,
+  ApprovalResponse,
   BDHiringSignalRequest,
   BDHiringSignalResponse,
   BDStrategyRequest,
@@ -13,9 +14,17 @@ import type {
   MeResponse,
   MessageResponse,
   PydanticValidationItem,
+  RefreshRequest,
   SignupRequest,
+  SignupResponse,
   StrategyRequest,
   StrategyResponse,
+  UpdateEmailRequest,
+  UpdateEmailResponse,
+  UpdatePasswordRequest,
+  UpdatePasswordResponse,
+  UpdateProfileRequest,
+  UserWithRoles,
 } from "./types";
 
 // Which router these conversation/message/strategy endpoints hit --
@@ -26,7 +35,7 @@ import type {
 // explicitly.
 export type ApiBase = "chat" | "bd-chat";
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
+const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "https://127.0.0.1:8000";
 
 function describeError(error: ApiError): string {
   if (error.kind === "quality_gate") return error.detail.message;
@@ -107,15 +116,55 @@ export function login(body: LoginRequest): Promise<LoginResponse> {
   return request<LoginResponse>("/auth/login", { method: "POST", body });
 }
 
-// Returns a session immediately (same shape as login()) -- the backend logs
-// the new account in as its last step, so no separate /auth/login call is
-// needed after signing up.
-export function signup(body: SignupRequest): Promise<LoginResponse> {
-  return request<LoginResponse>("/auth/signup", { method: "POST", body });
+// Does NOT log the account in -- a self-service signup is created pending
+// admin approval; POST /auth/login 403s for it until an admin approves via
+// POST /admin/users/{id}/approve. See AuthContext.tsx's signup().
+export function signup(body: SignupRequest): Promise<SignupResponse> {
+  return request<SignupResponse>("/auth/signup", { method: "POST", body });
+}
+
+// Exchanges a refresh_token for a fresh access_token/refresh_token pair --
+// used by AuthContext to keep a session alive past the access token's short
+// expiry without forcing a full re-login. An expired/revoked refresh_token
+// surfaces as a 401 ApiException, same shape as a bad login.
+export function refreshSession(body: RefreshRequest): Promise<LoginResponse> {
+  return request<LoginResponse>("/auth/refresh", { method: "POST", body });
 }
 
 export function fetchMe(token: string): Promise<MeResponse> {
   return request<MeResponse>("/auth/me", { token });
+}
+
+// Settings page's Name/Username save -- see SettingsPage.tsx.
+export function updateProfile(token: string, body: UpdateProfileRequest): Promise<MeResponse> {
+  return request<MeResponse>("/auth/me", { method: "PATCH", token, body });
+}
+
+// Starts Supabase's email-change confirmation flow -- does not apply
+// immediately. See SettingsPage.tsx.
+export function updateEmail(token: string, body: UpdateEmailRequest): Promise<UpdateEmailResponse> {
+  return request<UpdateEmailResponse>("/auth/me/email", { method: "PUT", token, body });
+}
+
+export function updatePassword(token: string, body: UpdatePasswordRequest): Promise<UpdatePasswordResponse> {
+  return request<UpdatePasswordResponse>("/auth/me/password", { method: "PUT", token, body });
+}
+
+// Admin-only user directory -- see AdminDashboardPage.tsx.
+export function listUsers(token: string): Promise<UserWithRoles[]> {
+  return request<UserWithRoles[]>("/admin/users", { token });
+}
+
+// Permanently deletes a user's account (not just a role revoke) -- see
+// DELETE /admin/users/{user_id} in app/routers/admin.py.
+export function deleteUser(token: string, userId: string): Promise<void> {
+  return request<void>(`/admin/users/${userId}`, { method: "DELETE", token });
+}
+
+// Approves a pending self-service signup so they can log in -- see POST
+// /admin/users/{user_id}/approve in app/routers/admin.py.
+export function approveUser(token: string, userId: string): Promise<ApprovalResponse> {
+  return request<ApprovalResponse>(`/admin/users/${userId}/approve`, { method: "POST", token });
 }
 
 export function createConversation(

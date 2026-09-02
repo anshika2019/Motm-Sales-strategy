@@ -1,0 +1,25 @@
+services:
+  backend:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - hf_cache:/home/appuser/.cache/huggingface
+    ports:
+      # Bound to localhost only -- the VPS's shared host-level Caddy
+      # (/etc/caddy/Caddyfile, already fronting ~25 other apps on this box)
+      # is the only public entrypoint. Matches how every other app here
+      # publishes its ports. See /etc/caddy/sites/motm-sales.caddy.
+      - "127.0.0.1:4020:8000"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:4021:80"
+
+volumes:
+  hf_cache:

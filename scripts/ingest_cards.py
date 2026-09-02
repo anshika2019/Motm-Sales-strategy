@@ -55,8 +55,14 @@ def _read_cards(path: Path) -> list[dict]:
             if not line:
                 continue
             card = json.loads(line)
-            if "principle_name" not in card or "principle" not in card:
-                raise ValueError(f"{path}:{line_number} missing 'principle_name' or 'principle'")
+            if "principle" not in card:
+                raise ValueError(f"{path}:{line_number} missing 'principle'")
+            if "principle_name" not in card:
+                if "principle_id" not in card:
+                    raise ValueError(
+                        f"{path}:{line_number} missing 'principle_name' (and no 'principle_id' to fall back on)"
+                    )
+                card["principle_name"] = card["principle_id"]
             cards.append(card)
     return cards
 

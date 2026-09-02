@@ -24,6 +24,11 @@ interface HistoryPanelProps {
    * api/client.ts. Defaults to "chat" (SE) so existing callers are
    * unaffected; BD's screen passes "bd-chat". */
   basePath?: ApiBase;
+  /** Collapses the panel to zero width (desktop) or slides it off-screen
+   * (mobile drawer) via CSS only -- content stays mounted so the width/
+   * transform transition has something to animate, rather than the panel
+   * popping in empty. See ChatPage.tsx/BDChatPage.tsx's sidebarOpen. */
+  collapsed?: boolean;
 }
 
 export default function HistoryPanel({
@@ -34,6 +39,7 @@ export default function HistoryPanel({
   onConversationDeleted,
   refreshSignal,
   basePath = "chat",
+  collapsed = false,
 }: HistoryPanelProps) {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -221,7 +227,7 @@ export default function HistoryPanel({
   const { today, earlier } = groupByRecency(conversations);
 
   return (
-    <aside className="history-panel">
+    <aside className={`history-panel${collapsed ? " collapsed" : ""}`} aria-hidden={collapsed}>
       <button className="history-new-button" onClick={onNewConversation}>
         + New conversation
       </button>

@@ -69,6 +69,10 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+
 class LoginResponse(BaseModel):
     access_token: str
     refresh_token: str
@@ -96,8 +100,37 @@ class MeResponse(BaseModel):
     id: UUID
     email: str
     full_name: str | None
+    username: str | None
     created_at: datetime
     roles: list[AppRole]
+
+
+class UpdateProfileRequest(BaseModel):
+    """Body for PATCH /auth/me -- the Settings page's Name/Username fields.
+    Both optional so a request only carrying one still works; omitted
+    fields are left untouched (unlike an empty string, which clears the
+    field). Email is deliberately NOT here -- it goes through Supabase's
+    own change-email flow instead (see UpdateEmailRequest), which requires
+    confirmation before it takes effect, so it can't be a plain DB write."""
+
+    full_name: str | None = Field(default=None, max_length=200)
+    username: str | None = Field(default=None, max_length=50)
+
+
+class UpdateEmailRequest(BaseModel):
+    email: str
+
+
+class UpdateEmailResponse(BaseModel):
+    message: str
+
+
+class UpdatePasswordRequest(BaseModel):
+    new_password: str = Field(min_length=8)
+
+
+class UpdatePasswordResponse(BaseModel):
+    message: str
 
 
 class UserWithRoles(BaseModel):
@@ -106,6 +139,22 @@ class UserWithRoles(BaseModel):
     full_name: str | None
     created_at: datetime
     roles: list[AppRole]
+    is_approved: bool
+
+
+class SignupResponse(BaseModel):
+    """Returned by POST /auth/signup instead of a session -- self-service
+    signups no longer log the new account in immediately (see
+    SIGNUP_ALLOWED_ROLES's docstring / login()'s approval check in
+    app/routers/auth.py): the account is created pending admin approval,
+    and POST /auth/login will 403 until an admin approves it."""
+
+    message: str
+
+
+class ApprovalResponse(BaseModel):
+    user_id: UUID
+    is_approved: bool
 
 
 class AssignRoleRequest(BaseModel):

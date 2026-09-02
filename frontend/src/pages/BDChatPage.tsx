@@ -28,7 +28,7 @@ import HistoryPanel from "../components/chat/HistoryPanel";
 import HistoryMessageCard from "../components/chat/HistoryMessageCard";
 import ThemeToggle from "../components/ThemeToggle";
 import { getGenerationLabel } from "../components/chat/generationLabel";
-import { SendIcon } from "../components/chat/icons";
+import { SendIcon, SidebarIcon, XIcon } from "../components/chat/icons";
 
 // BD counterpart of ChatPage.tsx (SE) -- mirrors its structure closely,
 // swapping in BD's composer/turn-card and pointing every API call at
@@ -125,6 +125,15 @@ interface SituationExchange extends BaseExchange {
   narrativeText: string;
   isStreamingNarrative: boolean;
   result?: MessageResponse;
+  // Which composer mode this was submitted from -- captured at submit
+  // time from composerMode below. Gates the "Generate Pitch" button
+  // together with show_pitch_button: the backend sets show_pitch_button
+  // on every completed strategy turn regardless of how casual the message
+  // was (see _build_message_response's default in app/routers/chat.py),
+  // so without this every plain ad-hoc question would also offer to
+  // generate a pitch. Only a turn submitted through the explicit "Describe
+  // a situation" mode is eligible.
+  submissionMode: "plain" | "situation";
 }
 
 interface HiringSignalExchange extends BaseExchange {
@@ -135,12 +144,33 @@ interface HiringSignalExchange extends BaseExchange {
 
 type Exchange = SituationExchange | HiringSignalExchange;
 
-export default function BDChatPage() {
+interface BDChatPageProps {
+  // Present only for accounts that also hold the admin role -- lets a
+  // dual-role (e.g. admin + BD) user reach the admin dashboard without
+  // affecting anyone else's routing. See App.tsx.
+  onOpenAdmin?: () => void;
+  onOpenSettings: () => void;
+}
+
+// Sidebar defaults open on desktop but starts closed on a narrow/mobile
+// viewport, matching the drawer's prior default-hidden behavior there
+// (see the <=780px rules in styles.css) while adding a real open/close
+// toggle for desktop, which previously had none.
+function defaultSidebarOpen(): boolean {
+  return typeof window === "undefined" || window.innerWidth > 780;
+}
+
+export default function BDChatPage({ onOpenAdmin, onOpenSettings }: BDChatPageProps) {
   const { token, user, logout, handleUnauthorized } = useAuth();
   const [exchanges, setExchanges] = useState<Exchange[]>([]);
   const [historyMessages, setHistoryMessages] = useState<MessageResponse[]>([]);
   const [isComposerOpen, setIsComposerOpen] = useState(true);
-  const [composerMode, setComposerMode] = useState<"situation" | "hiring_signal">("situation");
+  const [sidebarOpen, setSidebarOpen] = useState(defaultSidebarOpen);
+  // "plain" is the default, unselected state -- a bare chat textarea with
+  // neither tab active (like Claude/ChatGPT's plain composer). Clicking
+  // either tab switches into that mode's extra fields; the tab's own close
+  // (x) switches back to "plain" rather than there being no way back.
+  const [composerMode, setComposerMode] = useState<"plain" | "situation" | "hiring_signal">("plain");
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [historyRefreshSignal, setHistoryRefreshSignal] = useState(0);
   const conversationIdRef = useRef<string | null>(null);
@@ -269,11 +299,12 @@ export default function BDChatPage() {
         loadingLabel: getGenerationLabel(values.raw_message),
         narrativeText: "",
         isStreamingNarrative: false,
+        submissionMode: composerMode === "situation" ? "situation" : "plain",
       };
       setExchanges((prev) => [...prev, exchange]);
       void runExchange(exchange);
     },
-    [runExchange],
+    [runExchange, composerMode],
   );
 
   const handleSubmitHiringSignal = useCallback(
@@ -302,6 +333,10 @@ export default function BDChatPage() {
       loadingLabel: getGenerationLabel(PITCH_TRIGGER_DISPLAY_VALUES.raw_message, "generate_pitch"),
       narrativeText: "",
       isStreamingNarrative: false,
+      // Doesn't matter which value this carries -- wasExplicitPitchRequest
+      // already hides the button on a trigger="generate_pitch" exchange
+      // regardless of submissionMode.
+      submissionMode: "situation",
     };
     setExchanges((prev) => [...prev, exchange]);
     setIsComposerOpen(false);
@@ -334,12 +369,18 @@ export default function BDChatPage() {
       conversationIdRef.current = conversation.id;
       setActiveConversationId(conversation.id);
       setExchanges([]);
-      setIsComposerOpen(true);
       try {
         const result = await getConversationMessages(token!, conversation.id, "bd-chat");
         setHistoryMessages(result.messages);
+        // Collapse to the "Ask another question…" pill when the
+        // conversation already has messages -- otherwise the full
+        // composer (mode tabs included) stays pinned open at the bottom
+        // while the user is just reading history. Only a brand-new, empty
+        // conversation opens straight into the full composer.
+        setIsComposerOpen(result.messages.length === 0);
       } catch {
         setHistoryMessages([]);
+        setIsComposerOpen(true);
       }
     },
     [token],
@@ -366,16 +407,30 @@ export default function BDChatPage() {
 
   return (
     <div className="app-shell">
-      <input type="checkbox" id="sidebar-toggle" className="sidebar-toggle-checkbox" />
       <div className="top-bar">
         <div className="top-bar-left">
-          <label htmlFor="sidebar-toggle" className="sidebar-toggle-button" aria-label="Toggle conversation list">
-            ☰
-          </label>
-          <span className="top-bar-title">MOTM Sales Director — Business Development</span>
+          <button
+            type="button"
+            className="sidebar-toggle-button"
+            aria-label={sidebarOpen ? "Hide conversation history" : "Show conversation history"}
+            title={sidebarOpen ? "Hide conversation history" : "Show conversation history"}
+            onClick={() => setSidebarOpen((v) => !v)}
+          >
+            <SidebarIcon />
+          </button>
+          <span className="top-bar-title">MOTM Sales Director</span>
+          <span className="top-bar-title-sub">Business Development</span>
         </div>
         <div className="top-bar-user">
           <span>{user?.email}</span>
+          {onOpenAdmin && (
+            <button className="link-button" onClick={onOpenAdmin}>
+              Admin Dashboard
+            </button>
+          )}
+          <button className="link-button" onClick={onOpenSettings}>
+            Settings
+          </button>
           <button className="link-button" onClick={() => logout()}>
             Sign out
           </button>
@@ -392,9 +447,11 @@ export default function BDChatPage() {
           onConversationDeleted={handleConversationDeleted}
           refreshSignal={historyRefreshSignal}
           basePath="bd-chat"
+          collapsed={!sidebarOpen}
         />
 
         <div className="chat-main">
+          <div className="chat-scroll">
           <div className="chat-body">
             {isEmpty && (
               <div className="empty-state">
@@ -468,12 +525,13 @@ export default function BDChatPage() {
                         conversationId={activeConversationId!}
                         isLatest={index === exchanges.length - 1}
                         onGeneratePitch={
-                          wasExplicitPitchRequest(
+                          exchange.submissionMode === "situation" &&
+                          !wasExplicitPitchRequest(
                             exchange.trigger,
                             exchange.values.raw_message || exchange.values.situation,
                           )
-                            ? undefined
-                            : handleGeneratePitch
+                            ? handleGeneratePitch
+                            : undefined
                         }
                         generatePitchDisabled={isBusy}
                         basePath="bd-chat"
@@ -497,37 +555,58 @@ export default function BDChatPage() {
               </div>
             ))}
           </div>
+          </div>
 
           <div className="composer">
             <div className="composer-inner">
               {isComposerOpen ? (
                 <>
-                  <div className="composer-pills" style={{ marginBottom: 8 }}>
+                  <div className="mode-tabs">
                     <button
                       type="button"
-                      className={`role-option${composerMode === "situation" ? " selected" : ""}`}
-                      style={{ flex: "none", padding: "6px 12px" }}
-                      onClick={() => setComposerMode("situation")}
+                      className={`mode-tab${composerMode === "situation" ? " active" : ""}`}
+                      onClick={() => setComposerMode(composerMode === "situation" ? "plain" : "situation")}
                     >
-                      Describe a situation
+                      <span>Describe a situation</span>
+                      <span
+                        className="mode-tab-close"
+                        role="button"
+                        aria-label="Close describe-a-situation mode"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setComposerMode("plain");
+                        }}
+                      >
+                        <XIcon />
+                      </span>
                     </button>
                     <button
                       type="button"
-                      className={`role-option${composerMode === "hiring_signal" ? " selected" : ""}`}
-                      style={{ flex: "none", padding: "6px 12px" }}
-                      onClick={() => setComposerMode("hiring_signal")}
+                      className={`mode-tab${composerMode === "hiring_signal" ? " active" : ""}`}
+                      onClick={() => setComposerMode(composerMode === "hiring_signal" ? "plain" : "hiring_signal")}
                     >
-                      Approach a hiring company
+                      <span>Approach a hiring company</span>
+                      <span
+                        className="mode-tab-close"
+                        role="button"
+                        aria-label="Close approach-a-hiring-company mode"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setComposerMode("plain");
+                        }}
+                      >
+                        <XIcon />
+                      </span>
                     </button>
                   </div>
-                  {composerMode === "situation" ? (
-                    <BDComposer onSubmit={handleSubmit} disabled={isBusy} />
-                  ) : (
+                  {composerMode === "hiring_signal" ? (
                     <HiringSignalComposer
                       onSubmit={handleSubmitHiringSignal}
                       disabled={isBusy}
-                      onCancel={() => setComposerMode("situation")}
+                      onCancel={() => setComposerMode("plain")}
                     />
+                  ) : (
+                    <BDComposer onSubmit={handleSubmit} disabled={isBusy} showDetailsPanel={composerMode === "situation"} />
                   )}
                 </>
               ) : (

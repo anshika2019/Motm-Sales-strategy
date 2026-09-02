@@ -16,7 +16,7 @@ import HistoryPanel from "../components/chat/HistoryPanel";
 import HistoryMessageCard from "../components/chat/HistoryMessageCard";
 import ThemeToggle from "../components/ThemeToggle";
 import { getGenerationLabel } from "../components/chat/generationLabel";
-import { SendIcon } from "../components/chat/icons";
+import { SendIcon, SidebarIcon } from "../components/chat/icons";
 
 // Prefers the profile's first name; falls back to a cleaned-up version of
 // the email's local part (stripped of digits/separators and title-cased)
@@ -90,12 +90,29 @@ interface Exchange {
   error?: ApiError;
 }
 
-export default function ChatPage() {
+interface ChatPageProps {
+  // Present only for accounts that also hold the admin role -- lets a
+  // dual-role (e.g. admin + SE) user reach the admin dashboard without
+  // affecting anyone else's routing. See App.tsx.
+  onOpenAdmin?: () => void;
+  onOpenSettings: () => void;
+}
+
+// Sidebar defaults open on desktop but starts closed on a narrow/mobile
+// viewport, matching the drawer's prior default-hidden behavior there
+// (see the <=780px rules in styles.css) while adding a real open/close
+// toggle for desktop, which previously had none.
+function defaultSidebarOpen(): boolean {
+  return typeof window === "undefined" || window.innerWidth > 780;
+}
+
+export default function ChatPage({ onOpenAdmin, onOpenSettings }: ChatPageProps) {
   const { token, user, logout, handleUnauthorized } = useAuth();
   const [exchanges, setExchanges] = useState<Exchange[]>([]);
   const [historyMessages, setHistoryMessages] = useState<MessageResponse[]>([]);
   const [websiteFieldError, setWebsiteFieldError] = useState<string | null>(null);
   const [isComposerOpen, setIsComposerOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(defaultSidebarOpen);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [historyRefreshSignal, setHistoryRefreshSignal] = useState(0);
   const conversationIdRef = useRef<string | null>(null);
@@ -278,16 +295,29 @@ export default function ChatPage() {
 
   return (
     <div className="app-shell">
-      <input type="checkbox" id="sidebar-toggle" className="sidebar-toggle-checkbox" />
       <div className="top-bar">
         <div className="top-bar-left">
-          <label htmlFor="sidebar-toggle" className="sidebar-toggle-button" aria-label="Toggle conversation list">
-            ☰
-          </label>
+          <button
+            type="button"
+            className="sidebar-toggle-button"
+            aria-label={sidebarOpen ? "Hide conversation history" : "Show conversation history"}
+            title={sidebarOpen ? "Hide conversation history" : "Show conversation history"}
+            onClick={() => setSidebarOpen((v) => !v)}
+          >
+            <SidebarIcon />
+          </button>
           <span className="top-bar-title">MOTM Sales Director</span>
         </div>
         <div className="top-bar-user">
           <span>{user?.email}</span>
+          {onOpenAdmin && (
+            <button className="link-button" onClick={onOpenAdmin}>
+              Admin Dashboard
+            </button>
+          )}
+          <button className="link-button" onClick={onOpenSettings}>
+            Settings
+          </button>
           <button className="link-button" onClick={() => logout()}>
             Sign out
           </button>
@@ -303,9 +333,11 @@ export default function ChatPage() {
           onNewConversation={handleNewConversation}
           onConversationDeleted={handleConversationDeleted}
           refreshSignal={historyRefreshSignal}
+          collapsed={!sidebarOpen}
         />
 
         <div className="chat-main">
+          <div className="chat-scroll">
           <div className="chat-body">
             {isEmpty && (
               <div className="empty-state">
@@ -372,6 +404,7 @@ export default function ChatPage() {
                 )}
               </div>
             ))}
+          </div>
           </div>
 
           <div className="composer">
