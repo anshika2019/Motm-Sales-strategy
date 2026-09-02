@@ -115,6 +115,23 @@ Rebuilds only the images whose source changed; `.env` and the `hf_cache`
 volume are untouched. No Caddy changes needed unless you touch
 `motm-sales.caddy` itself (then repeat step 4).
 
+### Automatic deployment (GitHub Actions)
+
+Every push to `main` runs [.github/workflows/deploy.yml](.github/workflows/deploy.yml),
+which SSHes into the VPS and runs the exact two commands above. Check
+progress/failures under the repo's **Actions** tab on GitHub.
+
+It does **not** run database migrations — that stays a manual, deliberate
+step (see "Database migrations" above), even when auto-deploy is on.
+
+One-time setup for this (already done if you're reading this after it was
+set up):
+1. A dedicated ed25519 keypair, generated just for this workflow — its
+   public half is appended to the VPS's `~/.ssh/authorized_keys`.
+2. Three repo secrets under Settings → Secrets and variables → Actions:
+   `VPS_SSH_KEY` (the private key), `VPS_HOST` (the VPS's IP), `VPS_USER`
+   (`root`).
+
 ## Rolling back
 
 ```bash
