@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { useAuth } from "../auth/AuthContext";
 import type { AppRole } from "../api/types";
+import { EyeIcon, EyeOffIcon } from "../components/chat/icons";
 
 // The only two roles POST /auth/signup accepts -- see SIGNUP_ALLOWED_ROLES
 // in app/routers/auth.py. Keep this list in sync with that set; the backend
@@ -19,6 +20,7 @@ export default function SignupPage({ onSwitchToLogin }: { onSwitchToLogin: () =>
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [role, setRole] = useState<AppRole>("motm_bd");
 
   function handleSubmit(e: FormEvent) {
@@ -77,15 +79,26 @@ export default function SignupPage({ onSwitchToLogin }: { onSwitchToLogin: () =>
           </div>
           <div className="field">
             <label htmlFor="signup_password">Password</label>
-            <input
-              id="signup_password"
-              type="password"
-              autoComplete="new-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              minLength={8}
-              required
-            />
+            <div className="password-field">
+              <input
+                id="signup_password"
+                type={showPassword ? "text" : "password"}
+                autoComplete="new-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                minLength={8}
+                required
+              />
+              <button
+                type="button"
+                className="password-toggle"
+                onClick={() => setShowPassword((v) => !v)}
+                aria-label={showPassword ? "Hide password" : "Show password"}
+                title={showPassword ? "Hide password" : "Show password"}
+              >
+                {showPassword ? <EyeOffIcon /> : <EyeIcon />}
+              </button>
+            </div>
           </div>
           <div className="field">
             <label>Workspace</label>
