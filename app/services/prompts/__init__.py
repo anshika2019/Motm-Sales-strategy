@@ -26,6 +26,7 @@ from app.services.prompts.pitch_feedback_classification_prompt import (
 from app.services.prompts.pitch_generation_prompt import PITCH_GENERATION_PROMPT
 from app.services.prompts.product_extraction_prompt import PRODUCT_EXTRACTION_PROMPT
 from app.services.prompts.query_expansion_prompt import QUERY_EXPANSION_PROMPT
+from app.services.prompts.sales_objection_response_prompt import SALES_OBJECTION_RESPONSE_PROMPT
 from app.services.prompts.sales_pitch_golden_rule_footer import _SALES_PITCH_GOLDEN_RULE_FOOTER
 from app.services.prompts.sales_pitch_merged_prompt import SALES_PITCH_MERGED_PROMPT
 # RETIRED — replaced by SALES_PITCH_MERGED_PROMPT
@@ -33,6 +34,8 @@ from app.services.prompts.sales_pitch_merged_prompt import SALES_PITCH_MERGED_PR
 # from app.services.prompts.sales_pitch_prose_prompt import SALES_PITCH_PROSE_TEMPLATE
 from app.services.prompts.sales_pitch_subsections import SALES_PITCH_SUBSECTIONS
 from app.services.prompts.situation_enrichment_prompt import SITUATION_ENRICHMENT_PROMPT
+from app.services.prompts.strategy_advisory_prompt import STRATEGY_ADVISORY_PROMPT
+from app.services.prompts.strategy_checklist_prompt import STRATEGY_CHECKLIST_PROMPT
 from app.services.prompts.strategy_narrative_prompt import STRATEGY_NARRATIVE_PROMPT
 from app.services.prompts.website_url_extraction_prompt import WEBSITE_URL_EXTRACTION_PROMPT
 from app.services.prompts.whatsapp_section_template import WHATSAPP_SECTION_TEMPLATE
@@ -56,10 +59,13 @@ __all__ = [
     "PITCH_GENERATION_PROMPT",
     "PRODUCT_EXTRACTION_PROMPT",
     "QUERY_EXPANSION_PROMPT",
+    "SALES_OBJECTION_RESPONSE_PROMPT",
     "SALES_PITCH_MERGED_PROMPT",
     # "SALES_PITCH_PROSE_TEMPLATE",  # RETIRED — replaced by SALES_PITCH_MERGED_PROMPT
     "SALES_PITCH_SUBSECTIONS",
     "SITUATION_ENRICHMENT_PROMPT",
+    "STRATEGY_ADVISORY_PROMPT",
+    "STRATEGY_CHECKLIST_PROMPT",
     "STRATEGY_NARRATIVE_PROMPT",
     "WEBSITE_URL_EXTRACTION_PROMPT",
     "WHATSAPP_SECTION_TEMPLATE",

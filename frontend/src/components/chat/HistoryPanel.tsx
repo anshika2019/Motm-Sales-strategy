@@ -162,6 +162,11 @@ export default function HistoryPanel({
               day: "numeric",
               month: "short",
             })}
+            {" · "}
+            {new Date(conv.updated_at).toLocaleTimeString(undefined, {
+              hour: "numeric",
+              minute: "2-digit",
+            })}
           </span>
 
           {!isRenaming && (

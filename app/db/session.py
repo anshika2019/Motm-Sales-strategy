@@ -36,6 +36,8 @@ def _async_database_url() -> URL:
 engine = create_async_engine(
     _async_database_url(),
     connect_args={"ssl": "require", "statement_cache_size": 0},
+    pool_pre_ping=True,
+    pool_recycle=1800,
 )
 
 async_session_factory = async_sessionmaker(engine, expire_on_commit=False)

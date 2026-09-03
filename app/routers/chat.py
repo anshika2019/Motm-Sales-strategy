@@ -640,6 +640,15 @@ def _merge_followup_situation(prior_context: dict, situation_raw: str) -> dict:
 
 _PITCH_TRIGGER = "generate_pitch"
 
+# detect_output_format()'s "strategy_only" bucket was split into subtypes
+# (see generate_narrative_strategy()'s output_subtype dispatch in llm.py) so
+# a reported objection, an advisory question, and a discovery checklist ask
+# each get their own shape instead of one rigid memo -- all four still stay
+# on the narrative path rather than being routed into pitch generation.
+_STRATEGY_FORMATS = frozenset(
+    {"strategy_only", "strategy_objection", "strategy_advisory", "strategy_checklist"}
+)
+
 
 async def resolve_output_format(
     session: AsyncSession, conversation_id: UUID, intent_text: str, is_followup: bool
@@ -1838,6 +1847,7 @@ def _build_pipeline_metadata(
     strategy_fields: dict | None,
     narrative: str | None,
     company_match: dict | None = None,
+    output_format: str | None = None,
 ) -> dict:
     return {
         "scraped_pages": [label for label, _ in ctx.pages],
@@ -1854,6 +1864,12 @@ def _build_pipeline_metadata(
         "has_feedback_context": bool(ctx.feedback_context),
         "narrative": narrative,
         "company_match": company_match,
+        # Resolved strategy subtype (strategy_only/strategy_objection/
+        # strategy_advisory/strategy_checklist) that picked the narrative
+        # prompt shape -- see generate_narrative_strategy()'s output_subtype
+        # dispatch in llm.py. None for the non-streaming post_strategy()
+        # path, which doesn't compute this classification.
+        "output_format": output_format,
     }
 
 
@@ -1942,7 +1958,7 @@ async def post_strategy(
     output_format = await resolve_output_format(
         session, conversation_id, intent_text, is_followup
     )
-    if output_format != "strategy_only":
+    if output_format not in _STRATEGY_FORMATS:
         return await _handle_direct_pitch_intent(
             session,
             conversation,
@@ -2103,7 +2119,7 @@ async def post_strategy_stream(
     output_format = await resolve_output_format(
         session, conversation_id, intent_text, is_followup
     )
-    if output_format != "strategy_only":
+    if output_format not in _STRATEGY_FORMATS:
         prepared = await _prepare_direct_pitch_intent(
             session,
             conversation,
@@ -2238,6 +2254,7 @@ async def post_strategy_stream(
                 focused_followup=ctx.is_focused_followup,
                 enriched_situation=ctx.enriched_situation,
                 conversation_history=conversation_history,
+                output_subtype=output_format,
             ):
                 narrative_parts.append(delta)
                 yield sse("narrative_chunk", {"delta": delta})
@@ -2258,6 +2275,7 @@ async def post_strategy_stream(
                 strategy_fields=None,
                 narrative=full_narrative,
                 company_match=match_result if ctx.website_url else None,
+                output_format=output_format,
             ),
         )
         session.add(assistant_message)

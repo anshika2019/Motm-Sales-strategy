@@ -31,12 +31,15 @@ from app.services.prompts import (
     PITCH_GENERATION_PROMPT,
     PRODUCT_EXTRACTION_PROMPT,
     QUERY_EXPANSION_PROMPT,
+    SALES_OBJECTION_RESPONSE_PROMPT,
     SALES_PITCH_MERGED_PROMPT,
     # RETIRED — replaced by SALES_PITCH_MERGED_PROMPT
     # Kept here temporarily for reference. Safe to delete after testing.
     # SALES_PITCH_PROSE_TEMPLATE,
     SALES_PITCH_SUBSECTIONS,
     SITUATION_ENRICHMENT_PROMPT,
+    STRATEGY_ADVISORY_PROMPT,
+    STRATEGY_CHECKLIST_PROMPT,
     STRATEGY_NARRATIVE_PROMPT,
     WEBSITE_URL_EXTRACTION_PROMPT,
     WHATSAPP_SECTION_TEMPLATE,
@@ -859,6 +862,9 @@ _OUTPUT_FORMATS = (
     "sales_pitch_full",
     "all_formats",
     "strategy_only",
+    "strategy_objection",
+    "strategy_advisory",
+    "strategy_checklist",
 ) + _SALES_PITCH_SECTION_FORMATS
 
 # Keyword -> "sales_pitch_*" fallback map, used only when the classifier
@@ -872,7 +878,7 @@ _SALES_PITCH_SECTION_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("sales_pitch_elevator", ("elevator pitch", "elevator", "elevated pitch")),
     ("sales_pitch_main", ("main sales pitch", "main pitch", "main pitch script")),
     ("sales_pitch_cold_call", ("5r", "5-r")),
-    ("sales_pitch_persona", ("persona",)),
+    ("sales_pitch_persona", ("persona", " vs ", " versus ", "compared to")),
     ("sales_pitch_discovery", ("discovery question", "discovery")),
     ("sales_pitch_followup", ("follow-up", "follow up", "followup")),
     ("sales_pitch_objection", ("objection",)),
@@ -937,7 +943,62 @@ async def detect_output_format(user_message: str) -> str:
     if len(named_channels) == 1:
         return named_channels[0]
     generic_pitch_keywords = ("pitch", "message", "draft", "script")
-    return "sales_pitch_full" if any(k in lowered for k in generic_pitch_keywords) else "strategy_only"
+    if any(k in lowered for k in generic_pitch_keywords):
+        return "sales_pitch_full"
+
+    # Strategy subtype heuristics -- only reached once no channel/pitch
+    # keyword matched above, so this never steals a real outreach request.
+    # Order matters: objection language checked first since a reported
+    # objection can also mention "should" ("should I offer them a
+    # discount?"), which would otherwise false-positive as advisory.
+    if any(
+        k in lowered
+        for k in (
+            "said",
+            "objection",
+            "pushback",
+            "objected",
+            "why should i talk",
+            "why should i buy",
+            "what difference does",
+            "costs more than",
+            "how do i respond to",
+        )
+    ):
+        return "strategy_objection"
+    if any(
+        k in lowered
+        for k in (
+            "should i pursue",
+            "good prospect",
+            "worth pursuing",
+            "is this viable",
+            "still viable",
+            "who should i approach",
+            "whom should i approach",
+            "who should we approach",
+            "which person should i",
+            "who do i approach",
+            "should i approach",
+            "which department should",
+        )
+    ):
+        return "strategy_advisory"
+    if any(
+        k in lowered
+        for k in (
+            "what should i ask",
+            "what questions",
+            "what should i find out",
+            "what data do i need",
+            "what information",
+            "what information should i collect",
+            "what data should i gather",
+            "what info should i collect",
+        )
+    ):
+        return "strategy_checklist"
+    return "strategy_only"
 
 
 # ---------------------------------------------------------------------------
@@ -1681,6 +1742,7 @@ async def generate_narrative_strategy(
     focused_followup: bool = False,
     enriched_situation: str = "",
     conversation_history: list[dict] | None = None,
+    output_subtype: str = "strategy_only",
 ) -> AsyncIterator[str]:
     """Async generator yielding narrative text deltas as they stream from
     Gemini. Mirrors generate_strategy()'s prompt inputs but produces
@@ -1699,7 +1761,16 @@ async def generate_narrative_strategy(
     conditional onto STRATEGY_NARRATIVE_PROMPT (that pattern proved
     unreliable for the company-mismatch guard and the email-inclusion
     rule: instructions competing with "follow this structure exactly"
-    routinely lost)."""
+    routinely lost).
+
+    output_subtype (from detect_output_format() in this module) picks the
+    right shape for a non-follow-up "strategy_only"-bucketed question --
+    the bucket covers several genuinely different asks (a reported customer
+    objection wanting a spoken reply, an advisory/qualification question, a
+    plain discovery checklist, or an open-ended strategy question) that
+    should not all render as the same 11-section STRATEGY_NARRATIVE_PROMPT
+    memo. Same branching pattern as focused_followup above, extended with
+    more subtypes instead of adding conditionals inside one prompt."""
     company_context = _format_company_snapshot(company_snapshot)
 
     if focused_followup:
@@ -1725,7 +1796,7 @@ async def generate_narrative_strategy(
             "\n".join(f"  - {m}" for m in missing_info) if missing_info else "  None identified"
         )
 
-        system_prompt = STRATEGY_NARRATIVE_PROMPT.format(
+        format_kwargs = dict(
             sales_stage=sales_stage,
             problem_type=problem_type,
             buyer_persona=buyer_persona,
@@ -1736,13 +1807,59 @@ async def generate_narrative_strategy(
             memory_block=memory_block,
             feedback_block=feedback_block,
         )
-        max_output_tokens = 1800
+
+        if output_subtype == "strategy_objection":
+            system_prompt = SALES_OBJECTION_RESPONSE_PROMPT.format(**format_kwargs)
+            max_output_tokens = 500
+        elif output_subtype == "strategy_advisory":
+            system_prompt = STRATEGY_ADVISORY_PROMPT.format(**format_kwargs)
+            max_output_tokens = 700
+        elif output_subtype == "strategy_checklist":
+            system_prompt = STRATEGY_CHECKLIST_PROMPT.format(**format_kwargs)
+            max_output_tokens = 500
+        else:
+            system_prompt = STRATEGY_NARRATIVE_PROMPT.format(**format_kwargs)
+            max_output_tokens = 1800
 
     messages = _to_openai_messages(
         conversation_history,
         f"Product: {product}\nSituation: {situation}",
         system_instruction=system_prompt,
     )
+    if output_subtype == "strategy_advisory":
+        messages[1:1] = [
+            {
+                "role": "user",
+                "content": (
+                    "Remember: your response MUST use all five ## section headers: "
+                    "DIRECT ANSWER, QUALIFICATION CRITERIA, KEY QUESTIONS TO CONFIRM, "
+                    "RECOMMENDATION, INNOVATIVE APPROACH. A one-line answer is not acceptable."
+                ),
+            },
+            {
+                "role": "assistant",
+                "content": "Understood. I will use all five section headers in my response.",
+            },
+        ]
+    elif output_subtype == "strategy_objection":
+        messages[1:1] = [
+            {
+                "role": "user",
+                "content": (
+                    "Remember: your response MUST follow this exact format: ACKNOWLEDGE "
+                    "(one sentence), CLARIFY (one question), then IF/THEN conditional "
+                    "branches with RESPOND and ADVANCE. A prose paragraph is never "
+                    "acceptable for this prompt."
+                ),
+            },
+            {
+                "role": "assistant",
+                "content": (
+                    "Understood. I will use the ACKNOWLEDGE, CLARIFY, and IF/THEN "
+                    "format in my response."
+                ),
+            },
+        ]
     yielded_any = False
     try:
         async for delta in _openai_generate_stream(
