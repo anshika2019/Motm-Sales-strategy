@@ -16,7 +16,7 @@ import HistoryPanel from "../components/chat/HistoryPanel";
 import HistoryMessageCard from "../components/chat/HistoryMessageCard";
 import ThemeToggle from "../components/ThemeToggle";
 import { getGenerationLabel } from "../components/chat/generationLabel";
-import { SendIcon, SidebarIcon } from "../components/chat/icons";
+import { SendIcon, SettingsIcon, SidebarIcon } from "../components/chat/icons";
 
 // Prefers the profile's first name; falls back to a cleaned-up version of
 // the email's local part (stripped of digits/separators and title-cased)
@@ -315,8 +315,8 @@ export default function ChatPage({ onOpenAdmin, onOpenSettings }: ChatPageProps)
               Admin Dashboard
             </button>
           )}
-          <button className="link-button" onClick={onOpenSettings}>
-            Settings
+          <button className="link-button" onClick={onOpenSettings} title="Settings" aria-label="Settings">
+            <SettingsIcon />
           </button>
           <button className="link-button" onClick={() => logout()}>
             Sign out

@@ -180,19 +180,50 @@ _BD_NO_PROSPECT_ANCHOR_QUERIES = [
 # me a cold call script") are unaffected -- see _resolve_bd_output_format().
 _BD_STRATEGY_ONLY_PROBLEM_TYPES = {
     "accountability",
-    "scope_clarity",
     "intangible_offer",
     "tried_agencies",
     "does_not_understand_motm",
-    "motm_information",
-    "credibility_question",
     "reference_request",
-    "commercial_integrity",
     "diagnosis",
-    "team_capability_question",
-    "geographic_coverage",
     "qualification",
-    "no_clear_strategy",
+    "we_already_have_sales_team",
+    "comparing_with_hiring",
+    "we_are_hiring_someone",
+    "lack_of_differentiation",
+    "retainer_high",
+    "commission_only",
+    "already_have_salespeople",
+    "already_tried_outsourced_sales",
+    "capability_question",
+    "team_question",
+    "comparing_to_freelancer",
+    "cost_comparison",
+    "credibility",
+    "discount_request",
+    "dont_understand_motm_value",
+    "geographic_coverage_question",
+    "low_trust",
+    "no_budget",
+    "not_convinced_roi",
+    "pan_india_capability",
+    "price_objection",
+    "price_too_high",
+    "pricing_objection",
+    "pricing_question",
+    "proof_required",
+    "technical_objection",
+    "trust_issue",
+    "unclear_value",
+    "vendor_comparison",
+    "we_are_hiring",
+    "we_do_it_inhouse",
+    "weak_differentiation",
+    "want_results_first",
+    "core_mission",
+    "commercial_claims",
+    "no_clear_gtm",
+    "export_strategy",
+    "export_question",
 }
 
 
@@ -509,7 +540,7 @@ async def _run_bd_pre_generation_pipeline(
        it here, rather than forcing it to fit, is the deliberate choice.
     """
     prospect_website = body.prospect_website or ""
-    is_focused_followup = _is_focused_followup(situation_raw, is_followup)
+    is_focused_followup = await _is_focused_followup(situation_raw, is_followup, prior_context)
     pages: list[tuple[str, str]] = []
 
     if is_followup:

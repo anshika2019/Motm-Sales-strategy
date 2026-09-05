@@ -21,6 +21,8 @@ from app.services.prompts import (
     COLD_CALL_SECTION_TEMPLATE,
     CONVERSATION_MEMORY_PROMPT,
     EMAIL_SECTION_TEMPLATE,
+    FINAL_VERIFICATION_LAYER,
+    FOLLOWUP_CONTINUATION_PROMPT,
     FOLLOWUP_RESPONSE_PROMPT,
     MESSAGE_INTENT_PROMPT,
     METHODOLOGY_DETECTION_PROMPT,
@@ -32,6 +34,7 @@ from app.services.prompts import (
     PRODUCT_EXTRACTION_PROMPT,
     QUERY_EXPANSION_PROMPT,
     SALES_OBJECTION_RESPONSE_PROMPT,
+    SALES_PITCH_DUAL_PROMPT,
     SALES_PITCH_MERGED_PROMPT,
     # RETIRED — replaced by SALES_PITCH_MERGED_PROMPT
     # Kept here temporarily for reference. Safe to delete after testing.
@@ -802,6 +805,78 @@ _PITCH_SECTION_TEMPLATES: dict[str, str] = {
     "reengagement_only": SALES_PITCH_REENGAGEMENT_PROMPT + _SALES_PITCH_GOLDEN_RULE_FOOTER,
     "call_script_only": SALES_PITCH_MERGED_PROMPT,  # was COLD_CALL_SECTION_TEMPLATE
     "sales_pitch_full": SALES_PITCH_MERGED_PROMPT,  # was SALES_PITCH_PROSE_TEMPLATE
+    "sales_pitch_dual": """
+            Generate two complete, materially different pitches for the two
+            customer types, industries, or applications identified in the request.
+
+            ### PITCH 1 — [First industry / application / customer type]
+
+            START: 2-3 spoken sentences.
+            Open with: brief intro + reason for calling + permission ask.
+            Never open with "I appreciate your time" or any phrase implying
+            prior contact unless explicitly confirmed in the situation.
+
+            IF CUSTOMER SAYS "TELL ME MORE":
+            2-4 sentences using the value angle specific to this customer type.
+            Ground every claim in verified product facts or industry framing.
+            No invented customer outcomes.
+
+            DISCOVERY: One question specific to this application's buying logic.
+            Must be different from Pitch 2's discovery question.
+
+           NEXT STEP: One question or one request — never both in the same pitch.
+            If you ask a discovery question, that is the CTA. Do not also ask
+            for a meeting, a call, or a data review in the same pitch.
+
+            ---
+
+            ### PITCH 2 — [Second industry / application / customer type]
+
+            START: 2-3 spoken sentences.
+            Open fresh — do not carry context from Pitch 1.
+            Same START discipline: intro + reason + permission.
+
+            IF CUSTOMER SAYS "TELL ME MORE":
+            2-4 sentences using a genuinely different value angle from Pitch 1.
+            The difference must be visible — not just different words for the
+            same idea.
+
+            DISCOVERY: One question different from Pitch 1's discovery question.
+
+            NEXT STEP: One question or one request — never both in the same pitch.
+            If you ask a discovery question, that is the CTA. Do not also ask
+            for a meeting, a call, or a data review in the same pitch.
+            ---
+
+            ### WHY THESE PITCHES DIFFER
+            2-3 sentences. Explain what each customer type actually cares about
+            operationally and why that produces a different conversation angle,
+            discovery question, and CTA.
+
+            ###HARD RULES FOR BOTH PITCHES:
+
+            1. START must never open with "I wanted to follow up," "I wanted to
+            check in," "I appreciate your time," or any phrase implying prior
+            contact. Open with: name + company + reason for calling + permission.
+
+            2. Each pitch has ONE CTA only. The DISCOVERY question is the CTA.
+            Do not add a meeting request, call request, or data review after
+            the DISCOVERY question. If DISCOVERY is present, NEXT STEP is
+            complete — nothing else follows.
+
+            3. INNOVATIVE APPROACH must not suggest trials, pilots, free samples,
+            rental models, or any commercial commitment not established in
+            the situation. Suggest angles, framings, and entry points only.
+
+            ### INNOVATIVE APPROACH
+            1-3 specific, non-obvious ideas for one or both customer types.
+            Must be specific to this product and these two applications.
+            Not recycled from previous answers in this conversation.
+            No unauthorized commercial mechanisms (no trial offers, rental
+            models, or pilot programs unless explicitly authorized).
+            """
+
+            ,
     "sales_pitch_core_value": SALES_PITCH_SUBSECTIONS["core_value"] + _SALES_PITCH_GOLDEN_RULE_FOOTER,
     "sales_pitch_elevator": SALES_PITCH_SUBSECTIONS["elevator"] + _SALES_PITCH_GOLDEN_RULE_FOOTER,
     "sales_pitch_main": SALES_PITCH_SUBSECTIONS["main"] + _SALES_PITCH_GOLDEN_RULE_FOOTER,
@@ -822,7 +897,7 @@ _PITCH_SECTION_TEMPLATES: dict[str, str] = {
 # directive's language (OPPORTUNITY POSITIONING's fixed type list, the
 # 3-paragraph structure) is specific to SALES_PITCH_MERGED_PROMPT, so it
 # should fire for every format that resolves to it, not just one of them.
-_MERGED_PITCH_FORMATS = ("sales_pitch_full", "call_script_only", "sales_pitch_cold_call")
+_MERGED_PITCH_FORMATS = ("sales_pitch_full", "call_script_only", "sales_pitch_cold_call", "sales_pitch_dual")
 
 # Single-section "sales_pitch_*" requests (see above), listed once so both
 # the token-budget map and the keyword fallback below can iterate them
@@ -852,7 +927,6 @@ _PITCH_MAX_OUTPUT_TOKENS: dict[str, int] = {
 # giving legitimate re-generations room to actually vary.
 _PITCH_TEMPERATURE = 0.6
 
-
 _OUTPUT_FORMATS = (
     "email_only",
     "whatsapp_only",
@@ -860,6 +934,7 @@ _OUTPUT_FORMATS = (
     "meeting_script_only",
     "reengagement_only",
     "sales_pitch_full",
+    "sales_pitch_dual",
     "all_formats",
     "strategy_only",
     "strategy_objection",
@@ -919,6 +994,27 @@ async def detect_output_format(user_message: str) -> str:
         _record_gemini_usage(response, "detect_output_format")
         parsed = _extract_json(response.text)
         detected = parsed.get("format")
+
+        lowered = user_message.lower()
+        # --- DUAL PITCH OVERRIDE ---
+        # Must run before accepting any classifier result.
+        # Gemini frequently misclassifies "pitch for X vs Y" as
+        # sales_pitch_persona. The keyword check is deterministic
+        # and takes priority over the classifier for this specific
+        # pattern.
+        _dual_signals = ("versus", " vs ", "vs.")
+        _dual_pitch_context = (
+            "pitch", "pitch for", "approach", "different pitch",
+            "pitch differently", "how should i pitch", "why should",
+            "why are", "why do",
+        )
+        if (
+            any(k in lowered for k in _dual_signals)
+            and any(k in lowered for k in _dual_pitch_context)
+        ):
+            return "sales_pitch_dual"
+        # --- END DUAL PITCH OVERRIDE ---
+
         if detected in _OUTPUT_FORMATS:
             return detected
     except Exception as exc:
@@ -942,6 +1038,21 @@ async def detect_output_format(user_message: str) -> str:
 
     if len(named_channels) == 1:
         return named_channels[0]
+    # Dual-application/persona pitch detection — must run BEFORE the
+    # generic pitch keyword check so "pitch for X vs Y" resolves to
+    # sales_pitch_dual rather than falling through to sales_pitch_full.
+    dual_signals = ("versus", " vs ", "vs.")
+    dual_pitch_context = (
+        "pitch", "pitch for", "approach", "different pitch",
+        "pitch differently", "how should i pitch", "why should",
+        "why are", "why do",
+    )
+    if (
+        any(k in lowered for k in dual_signals)
+        and any(k in lowered for k in dual_pitch_context)
+    ):
+        return "sales_pitch_dual"
+
     generic_pitch_keywords = ("pitch", "message", "draft", "script")
     if any(k in lowered for k in generic_pitch_keywords):
         return "sales_pitch_full"
@@ -954,47 +1065,79 @@ async def detect_output_format(user_message: str) -> str:
     if any(
         k in lowered
         for k in (
-            "said",
-            "objection",
-            "pushback",
-            "objected",
-            "why should i talk",
-            "why should i buy",
-            "what difference does",
-            "costs more than",
-            "how do i respond to",
+"said",
+        "objection",
+        "pushback",
+        "objected",
+        "why should i talk",
+        "why should i buy",
+        "what difference does",
+        "costs more than",
+        "how do i respond to",
+        "what should i say",        # NEW — explicit coaching request
+        "already have",             # NEW — "already have 3 suppliers"
+        "already use",              # NEW — "already use ACSR conductor"
+        "no complaint",             # NEW — "use Sandvik, no complaint"
+        "running perfectly",        # NEW — "equipment running perfectly"
+        "running fine",             # NEW
+        "been doing it for",        # NEW — "doing it for 15 years"
+        "doing a good job",         # NEW — "painters doing a good job"
+        "oem provides",             # NEW
+        "oem itself provides",      # NEW
+        "makes financial sense",    # NEW — "how does this make sense?"
+        "cheaper than",             # NEW — "labour cheaper than machine"
+        "why should we change",     # NEW — "why change from ACSR?"
+        "why should i change",      # NEW
+        "why automate",             # NEW — "why should we automate?"
+        "why outsource",            # NEW
+        "why meet you",
         )
     ):
         return "strategy_objection"
     if any(
         k in lowered
         for k in (
-            "should i pursue",
-            "good prospect",
-            "worth pursuing",
-            "is this viable",
-            "still viable",
-            "who should i approach",
-            "whom should i approach",
-            "who should we approach",
-            "which person should i",
-            "who do i approach",
-            "should i approach",
-            "which department should",
+        "should i pursue",
+        "good prospect",
+        "worth pursuing",
+        "is this viable",
+        "still viable",
+        "who should i approach",
+        "whom should i approach",
+        "who should we approach",
+        "which person should i",
+        "who do i approach",
+        "should i approach",
+        "which department should",
+        "suitable for",             # NEW — "is every project suitable?"
+        "good fit for",             # NEW
+        "worth talking to",         # NEW
+        "should i talk to",         # NEW
+        "what makes a good",        # NEW — "what makes a good distributor?"
+        "should we appoint",        # NEW — distributor selection
+        "how many distributor",     # NEW
+        "still a good prospect",    # NEW
+        "is this prospect",         # NEW
+        "is this opportunity",    # "Should we appoint as many distributors?"
         )
     ):
         return "strategy_advisory"
-    if any(
+    if any (
         k in lowered
         for k in (
-            "what should i ask",
-            "what questions",
-            "what should i find out",
-            "what data do i need",
-            "what information",
-            "what information should i collect",
-            "what data should i gather",
-            "what info should i collect",
+        "what should i ask",
+        "what questions",
+        "what should i find out",
+        "what data do i need",
+        "what information",
+        "what information should i collect",
+        "what data should i gather",
+        "what info should i collect",
+        "what do i need to know",   # NEW
+        "what should i check",      # NEW
+        "what details should i",    # NEW
+        "what should i collect",    # NEW — shorter form
+        "what to find out",  
         )
     ):
         return "strategy_checklist"
@@ -1036,6 +1179,50 @@ async def classify_message_intent(message: str) -> str:
     except Exception as exc:
         _logger.warning("classify_message_intent failed, defaulting to sales_related: %s", exc)
     return "sales_related"
+
+
+# ---------------------------------------------------------------------------
+# Follow-Up Continuation Gate — call this (instead of a word-count
+# heuristic) on a follow-up turn to decide whether the message only reshapes
+# the already-established situation ("continuation", safe to skip
+# retrieval and use the short FOLLOWUP_RESPONSE_PROMPT) or introduces new
+# facts/objections/questions ("new_context", must run the full
+# retrieval + guarded strategy prompt). Word count is a bad proxy for this:
+# a short message like "why not just hire internally" is substantive new
+# context, not a trivial continuation.
+# ---------------------------------------------------------------------------
+
+_FOLLOWUP_CONTINUATION_CLASSES = ("continuation", "new_context")
+
+
+async def classify_followup_continuation(enriched_situation: str, message: str) -> bool:
+    """Returns True only for "continuation". Fails safe to False
+    ("new_context" -> full pipeline) on any classifier error or
+    unrecognized value -- under-triggering the guarded path is the safe
+    failure direction, unlike classify_message_intent's gate."""
+    prompt = FOLLOWUP_CONTINUATION_PROMPT.replace(
+        "{enriched_situation}", enriched_situation or "(no prior context)"
+    ).replace("{message}", message)
+    try:
+        response = await _client.aio.models.generate_content(
+            model=_MODEL_GEMINI,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                max_output_tokens=50,
+                thinking_config=_THINKING_MINIMAL,
+            ),
+        )
+        _record_gemini_usage(response, "classify_followup_continuation")
+        parsed = _extract_json(response.text)
+        classification = parsed.get("classification")
+        if classification in _FOLLOWUP_CONTINUATION_CLASSES:
+            return classification == "continuation"
+    except Exception as exc:
+        _logger.warning(
+            "classify_followup_continuation failed, defaulting to new_context: %s", exc
+        )
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -1817,6 +2004,9 @@ async def generate_narrative_strategy(
         elif output_subtype == "strategy_checklist":
             system_prompt = STRATEGY_CHECKLIST_PROMPT.format(**format_kwargs)
             max_output_tokens = 500
+        elif output_subtype == "sales_pitch_dual":
+            system_prompt = SALES_PITCH_DUAL_PROMPT.format(**format_kwargs)
+            max_output_tokens = 1200
         else:
             system_prompt = STRATEGY_NARRATIVE_PROMPT.format(**format_kwargs)
             max_output_tokens = 1800
@@ -2001,6 +2191,8 @@ PROSPECT SNAPSHOT (who MOTM is selling TO -- not MOTM's own profile):
 MOTM KNOWLEDGE CARDS:
 {context}
 {memory_block}{feedback_block}
+{FINAL_VERIFICATION_LAYER}
+
 Respond with ONLY a valid JSON object matching exactly this shape.
 No markdown. No text before or after the JSON.
 
@@ -2115,6 +2307,7 @@ async def generate_bd_narrative_strategy(
             memory_context=conversation_memory or "(none yet)",
             feedback_context=feedback_context or "(none yet)",
         )
+        system_prompt = f"{system_prompt}\n\n{FINAL_VERIFICATION_LAYER}"
         max_output_tokens = 600
     else:
         context = _format_bd_context(context_entries)
@@ -2142,6 +2335,7 @@ async def generate_bd_narrative_strategy(
             memory_block=memory_block,
             feedback_block=feedback_block,
         )
+        system_prompt = f"{system_prompt}\n\n{FINAL_VERIFICATION_LAYER}"
         max_output_tokens = 1800
 
     messages = _to_openai_messages(

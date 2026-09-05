@@ -12,6 +12,8 @@ from app.services.prompts.bd_strategy_narrative_prompt import BD_STRATEGY_NARRAT
 from app.services.prompts.cold_call_section_template import COLD_CALL_SECTION_TEMPLATE
 from app.services.prompts.conversation_memory_prompt import CONVERSATION_MEMORY_PROMPT
 from app.services.prompts.email_section_template import EMAIL_SECTION_TEMPLATE
+from app.services.prompts.final_verification_layer import FINAL_VERIFICATION_LAYER
+from app.services.prompts.followup_continuation_prompt import FOLLOWUP_CONTINUATION_PROMPT
 from app.services.prompts.followup_response_prompt import FOLLOWUP_RESPONSE_PROMPT
 from app.services.prompts.message_intent_prompt import MESSAGE_INTENT_PROMPT
 from app.services.prompts.methodology_detection_prompt import METHODOLOGY_DETECTION_PROMPT
@@ -27,6 +29,7 @@ from app.services.prompts.pitch_generation_prompt import PITCH_GENERATION_PROMPT
 from app.services.prompts.product_extraction_prompt import PRODUCT_EXTRACTION_PROMPT
 from app.services.prompts.query_expansion_prompt import QUERY_EXPANSION_PROMPT
 from app.services.prompts.sales_objection_response_prompt import SALES_OBJECTION_RESPONSE_PROMPT
+from app.services.prompts.sales_pitch_dual_prompt import SALES_PITCH_DUAL_PROMPT
 from app.services.prompts.sales_pitch_golden_rule_footer import _SALES_PITCH_GOLDEN_RULE_FOOTER
 from app.services.prompts.sales_pitch_merged_prompt import SALES_PITCH_MERGED_PROMPT
 # RETIRED — replaced by SALES_PITCH_MERGED_PROMPT
@@ -49,6 +52,8 @@ __all__ = [
     "COLD_CALL_SECTION_TEMPLATE",
     "CONVERSATION_MEMORY_PROMPT",
     "EMAIL_SECTION_TEMPLATE",
+    "FINAL_VERIFICATION_LAYER",
+    "FOLLOWUP_CONTINUATION_PROMPT",
     "FOLLOWUP_RESPONSE_PROMPT",
     "MESSAGE_INTENT_PROMPT",
     "METHODOLOGY_DETECTION_PROMPT",
@@ -60,6 +65,7 @@ __all__ = [
     "PRODUCT_EXTRACTION_PROMPT",
     "QUERY_EXPANSION_PROMPT",
     "SALES_OBJECTION_RESPONSE_PROMPT",
+    "SALES_PITCH_DUAL_PROMPT",
     "SALES_PITCH_MERGED_PROMPT",
     # "SALES_PITCH_PROSE_TEMPLATE",  # RETIRED — replaced by SALES_PITCH_MERGED_PROMPT
     "SALES_PITCH_SUBSECTIONS",

@@ -28,7 +28,7 @@ import HistoryPanel from "../components/chat/HistoryPanel";
 import HistoryMessageCard from "../components/chat/HistoryMessageCard";
 import ThemeToggle from "../components/ThemeToggle";
 import { getGenerationLabel } from "../components/chat/generationLabel";
-import { SendIcon, SidebarIcon, XIcon } from "../components/chat/icons";
+import { SendIcon, SettingsIcon, SidebarIcon, XIcon } from "../components/chat/icons";
 
 // BD counterpart of ChatPage.tsx (SE) -- mirrors its structure closely,
 // swapping in BD's composer/turn-card and pointing every API call at
@@ -428,8 +428,8 @@ export default function BDChatPage({ onOpenAdmin, onOpenSettings }: BDChatPagePr
               Admin Dashboard
             </button>
           )}
-          <button className="link-button" onClick={onOpenSettings}>
-            Settings
+          <button className="link-button" onClick={onOpenSettings} title="Settings" aria-label="Settings">
+            <SettingsIcon />
           </button>
           <button className="link-button" onClick={() => logout()}>
             Sign out

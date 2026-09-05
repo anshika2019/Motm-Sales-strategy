@@ -54,6 +54,7 @@ from app.services.llm import (
     _PITCH_SECTION_TEMPLATES,
     OPPORTUNITY_TYPE_LABELS,
     check_company_situation_match,
+    classify_followup_continuation,
     classify_message_intent,
     classify_pitch_feedback,
     classify_pitch_opportunity_type,
@@ -105,6 +106,129 @@ _FOLLOWUP_TRIGGER_PHRASES = (
     "can you", "just the", "only the", "summarize", "shorter", "simpler",
 )
 
+# Strip banned dual-pitch openers before persisting -- applied only to
+# sales_pitch_dual responses where weaker models ignore the opener
+# constraint despite prompt rules and worked examples. Mechanical
+# replacement is more reliable than prompt-only enforcement for this
+# specific failure pattern.
+
+
+def _fix_dual_pitch_openers(text: str) -> str:
+    """For sales_pitch_dual responses: removes the first non-empty
+    content line after each ## section header and inserts the correct
+    opener. Handles optional blank lines between the header and first
+    content line. Only called when output_format == 'sales_pitch_dual'."""
+    correct_opener = (
+        "Hi, I'm calling from MOTM. "
+        "Can I take a moment to explain why I'm reaching out?"
+    )
+
+    def replace_first_content_line(match):
+        header = match.group(1)       # ## Header line including newline
+        blank_lines = match.group(2)  # zero or more blank lines — discard
+        first_line = match.group(3)   # first content line — discard
+        second_line = match.group(4)  # second content line — discard
+        rest = match.group(5)         # rest of section — keep
+        logger.info(f"[OPENER_FIX] Replacing opener in: {repr(header.strip())}")
+        print(f"[OPENER_FIX] Replacing opener in: {repr(header.strip())}", flush=True)
+        return f"{header}{correct_opener}\n\n{rest}"
+
+    return re.sub(
+        r'(##\s*(?:PITCH\s*\d|PLANT HEAD|PURCHASE MANAGER|DESIGN ENGINEER|'
+        r'PRODUCTION MANAGER|MAINTENANCE|OPERATIONS|Laser Cutting|'
+        r'Food Packaging|Pharma|Electronics)[^\n]*\n)'
+        r'(\n*)'                      # group 2: zero or more blank lines
+        r'([^\n]+\n?)'                # group 3: first content line (discard)
+        r'([^\n]*\n?)'                # group 4: second content line (discard)
+        r'((?:(?!##)[\s\S])*)',       # group 5: rest of section — keep
+        replace_first_content_line,
+        text,
+        flags=re.IGNORECASE,
+    )
+
+
+def _fix_objection_response(text: str) -> str:
+    """For strategy_objection responses: removes fabricated
+    client references, unauthorized trial offers, and
+    invented percentage figures that persist despite
+    prompt rules."""
+
+    import re
+
+    # Pattern 1: Fabricated percentage figures
+    pct_patterns = [
+        r'(?:sometimes|often|typically) by (?:up to )?\d+[-–]\d+%[^.]*\.',
+        r'saves? (?:up to )?\d+[-–]\d+%[^.]*\.',
+        r'reduces? (?:\w+ ){0,4}by (?:up to )?\d+[-–]\d+%[^.]*\.',
+        r'(?:up to )?\d+[-–]\d+% (?:savings?|reduction|improvement|less)[^.]*\.',
+        r'—sometimes by up to[^.]*\.',
+    ]
+
+    for pattern in pct_patterns:
+        text = re.sub(
+            pattern,
+            '— the actual impact depends on your current metrics.',
+            text,
+            flags=re.IGNORECASE
+        )
+
+    # Pattern 4: Directional outcome claims without percentages
+    directional_patterns = [
+        r'significantly (?:cuts?|reduces?|lowers?|improves?|increases?)[^.]*\.',
+        r'dramatically (?:cuts?|reduces?|lowers?|improves?)[^.]*\.',
+        r'substantially (?:cuts?|reduces?|lowers?|improves?)[^.]*\.',
+        r'the largest (?:ongoing|recurring) cost[^.]*\.',
+        r'your (?:biggest|primary|main|largest) (?:cost|expense)[^.]*\.',
+        r'gains you can expect[^.]*\.',
+        r'benefits you can expect[^.]*\.',
+        r'savings you can expect[^.]*\.',
+    ]
+
+    replacement_directional = (
+        "— the actual impact depends on your current metrics, "
+        "which the next question will establish."
+    )
+
+    for pattern in directional_patterns:
+        text = re.sub(
+            pattern,
+            replacement_directional,
+            text,
+            flags=re.IGNORECASE
+        )
+
+    # Pattern 2: Fabricated client references
+    client_patterns = [
+        r'many of our clients[^.]*\.',
+        r'most of our clients[^.]*\.',
+        r'our clients (?:also|often|typically)[^.]*\.',
+        r'companies like yours[^.]*\.',
+        r'similar (?:OEMs|companies|plants|operations)[^.]*\.',
+    ]
+
+    for pattern in client_patterns:
+        text = re.sub(pattern, '', text, flags=re.IGNORECASE)
+
+    # Pattern 3: Trial offers in ADVANCE sections only
+    advance_sections = text.split('ADVANCE:')
+    cleaned = [advance_sections[0]]
+    trial_patterns = [
+        r'(?:for )?a trial (?:run|period|phase|with our)[^.]*\.',
+        r'side-by-side (?:trial|test|comparison)[^.]*\.',
+        r'fits? (?:your )?process goals\.',
+    ]
+    for section in advance_sections[1:]:
+        for pattern in trial_patterns:
+            section = re.sub(
+                pattern,
+                'understanding your current metrics.',
+                section,
+                flags=re.IGNORECASE
+            )
+        cleaned.append(section)
+    text = 'ADVANCE:'.join(cleaned)
+
+    return text
 
 @router.post(
     "/conversations",
@@ -595,11 +719,21 @@ def _is_followup(situation_raw: str, website_url: str, product: str, prior_conte
     return _looks_like_followup_text(situation_raw)
 
 
-def _is_focused_followup(situation_raw: str, is_followup: bool) -> bool:
+async def _is_focused_followup(
+    situation_raw: str, is_followup: bool, prior_context: dict | None
+) -> bool:
     """Stricter than is_followup: gates the retrieval-skip + minimal-answer
-    prompt. is_followup AND under 15 words (website_url absence already
-    guaranteed by is_followup==True)."""
-    return is_followup and len(situation_raw.split()) < _FOLLOWUP_WORD_THRESHOLD
+    prompt. is_followup AND classify_followup_continuation() says this
+    message only reshapes the already-established situation rather than
+    introducing new facts/objections/questions (website_url absence already
+    guaranteed by is_followup==True). Word count used to gate this instead,
+    but a short message like "why not just hire internally" is substantive
+    new context, not a trivial continuation -- see
+    classify_followup_continuation()'s docstring in llm.py."""
+    if not is_followup:
+        return False
+    enriched_situation = (prior_context or {}).get("enriched_situation", "")
+    return await classify_followup_continuation(enriched_situation, situation_raw)
 
 
 def _is_formatting_only_followup(situation_raw: str) -> bool:
@@ -646,7 +780,7 @@ _PITCH_TRIGGER = "generate_pitch"
 # each get their own shape instead of one rigid memo -- all four still stay
 # on the narrative path rather than being routed into pitch generation.
 _STRATEGY_FORMATS = frozenset(
-    {"strategy_only", "strategy_objection", "strategy_advisory", "strategy_checklist"}
+    {"strategy_only", "strategy_objection", "strategy_advisory", "strategy_checklist", "sales_pitch_dual"}
 )
 
 
@@ -675,14 +809,27 @@ async def resolve_output_format(
     case this guards -- override to "sales_pitch_full" so the message
     still reaches generate_pitch(), where {latest_request} (see
     _build_pitch_context()) carries the actual instruction text (e.g.
-    "more detail") into the model."""
+    "more detail") into the model.
+
+    That override used to fire unconditionally whenever is_followup was
+    true and the last message was a pitch -- but is_followup is only a
+    word-count heuristic, so a short FRESH question ("our problem is
+    conversion, can MOTM help?") right after an email/WhatsApp draft was
+    getting force-routed back into generate_pitch() instead of a real
+    strategy answer. classify_followup_continuation() (see llm.py) gates
+    the override on whether this message actually asks to reshape/redraft
+    that specific pitch, using its own text as the comparison context via
+    _load_last_pitch_message_text() -- not just on "was the last thing a
+    pitch"."""
     if not intent_text.strip():
         return "strategy_only"
     detected = await detect_output_format(intent_text)
     if detected == "strategy_only" and is_followup:
         last_type = await _load_last_assistant_message_type(session, conversation_id)
         if last_type == MessageType.pitch:
-            return "sales_pitch_full"
+            last_pitch_text = await _load_last_pitch_message_text(session, conversation_id)
+            if await classify_followup_continuation(last_pitch_text or "", intent_text):
+                return "sales_pitch_full"
     return detected
 
 
@@ -965,7 +1112,7 @@ async def _run_pre_generation_pipeline(
     post_strategy_stream since they share this helper."""
     website_url = body.website_url or ""
     product = body.product or ""
-    is_focused_followup = _is_focused_followup(situation_raw, is_followup)
+    is_focused_followup = await _is_focused_followup(situation_raw, is_followup, prior_context)
 
     if is_followup:
         pages: list[tuple[str, str]] = []
@@ -2119,6 +2266,7 @@ async def post_strategy_stream(
     output_format = await resolve_output_format(
         session, conversation_id, intent_text, is_followup
     )
+    print(f"[FORMAT_DEBUG] intent_text={intent_text!r} resolved output_format={output_format!r} in _STRATEGY_FORMATS={output_format in _STRATEGY_FORMATS}", flush=True)
     if output_format not in _STRATEGY_FORMATS:
         prepared = await _prepare_direct_pitch_intent(
             session,
@@ -2257,13 +2405,22 @@ async def post_strategy_stream(
                 output_subtype=output_format,
             ):
                 narrative_parts.append(delta)
-                yield sse("narrative_chunk", {"delta": delta})
+                if output_format != "sales_pitch_dual":
+                    yield sse("narrative_chunk", {"delta": delta})
         except Exception:
             logger.exception("Narrative generation failed for conversation %s", conversation_id)
             yield sse("error", {"message": "Narrative generation failed.", "kind": "server"})
             return
 
         full_narrative = "".join(narrative_parts)
+        logger.info(f"[DUAL_PITCH_DEBUG] output_format={output_format!r} narrative_len={len(full_narrative)}")
+        logger.info(f"[DUAL_PITCH_DEBUG] about to fix openers, full_narrative starts with: {repr(full_narrative[:100])}")
+        print(f"[DUAL_PITCH_DEBUG] about to fix openers, full_narrative starts with: {repr(full_narrative[:100])}", flush=True)
+        if output_format == "sales_pitch_dual":
+            full_narrative = _fix_dual_pitch_openers(full_narrative)
+            yield sse("narrative_chunk", {"delta": full_narrative})
+        if output_format == "strategy_objection":
+            full_narrative = _fix_objection_response(full_narrative)
 
         assistant_message = Message(
             conversation_id=conversation_id,

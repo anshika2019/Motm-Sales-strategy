@@ -8,6 +8,7 @@ import {
   CheckIcon,
   ClockIcon,
   SearchIcon,
+  SettingsIcon,
   TrashIcon,
   UsersIcon,
   WrenchIcon,
@@ -348,8 +349,8 @@ export default function AdminDashboardPage({ onBackToWorkspace, onOpenSettings }
               Back to workspace
             </button>
           )}
-          <button className="link-button" onClick={onOpenSettings}>
-            Settings
+          <button className="link-button" onClick={onOpenSettings} title="Settings" aria-label="Settings">
+            <SettingsIcon />
           </button>
           <button className="link-button" onClick={() => logout()}>
             Sign out
